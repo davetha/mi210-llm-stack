@@ -27,6 +27,28 @@ See [`benchmarks-13k-prefill.md`](./benchmarks-13k-prefill.md) for full details.
 
 ---
 
+## KV Cache Compression Prefill A/B Benchmark
+
+How KV cache quantization type (`f16`, `q4_0`, `q8_0`, `q8_0/q4_1`) affects
+prefill throughput on llama.cpp, across all-GPU and split CPU/GPU configs.
+See [`kv-compression-prefill.md`](./kv-compression-prefill.md) for full details.
+
+| Config | GPU layers | KV type | Prefill (tok/s) | vs f16 |
+|---|---|---|---:|---:|
+| A: all-GPU f16 | 27/27 | f16/f16 | 14.4 ⚠ | 1.0× |
+| B: all-GPU q4_0 | 27/27 | q4_0/q4_0 | 492.4 | **34×** |
+| C: all-GPU q8_0 | 27/27 | q8_0/q8_0 | 462.1 | 32× |
+| D: all-GPU q8_0/q4_1 | 27/27 | q8_0/q4_1 | 461.5 | 32× |
+| E: split f16 | 23/27 | f16/f16 | 648.9 | 1.0× |
+| F: split q4_0 | 23/27 | q4_0/q4_0 | 445.6 | 0.69× |
+| G: split q8_0/q4_1 | 23/27 | q8_0/q4_1 | 417.1 | 0.64× |
+
+> f16 KV on all-GPU is **34× slower** than q4_0 — VRAM starvation under
+> production load kills the flash-attention workspace. With adequate VRAM
+> (split config), f16 is actually the **fastest** prefill type.
+
+---
+
 ## Summary Table
 
 ### vLLM (single MI210)
