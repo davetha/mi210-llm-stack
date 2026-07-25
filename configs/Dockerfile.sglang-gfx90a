@@ -1,0 +1,19 @@
+FROM llama-vllm025:gfx90a
+
+# Rust toolchain for building outlines_core (SGLang grammar dep)
+RUN curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install SGLang with all extras. Let it pull flashinfer (CUDA) — we will use
+# the triton or vllm attention backend at runtime which does NOT require flashinfer.
+# We accept that flashinfer-python will install but fail to load on ROCm; SGLang
+# tolerates this if you explicitly pick a different attention backend.
+RUN pip install --no-cache-dir "sglang[all]"
+
+# Verify core import (some optional bits may fail; that is OK)
+RUN python3 -c "import sglang; print(\"sglang\", sglang.__version__, \"OK\")"
+
+# Smoke test: detect GPUs via PyTorch
+RUN python3 -c "import torch; print(\"GPU count:\", torch.cuda.device_count()); [print(f\"  GPU{i}:\", torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"
+
+CMD ["/bin/bash"]

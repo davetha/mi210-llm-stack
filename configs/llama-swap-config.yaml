@@ -1,0 +1,78 @@
+healthCheckTimeout: 600
+logLevel: info
+
+groups:
+  "persistent":
+    persistent: true
+    swap: false
+    members: ["deephat"]
+  "hot":
+    swap: false
+    exclusive: true
+    members: ["coder"]
+  "big":
+    swap: true
+    exclusive: true
+    members: ["thinking-80b", "235b", "minimax", "mimo"]
+
+hooks:
+  on_startup:
+    preload: ["deephat", "coder"]
+
+models:
+  "coder":
+    cmd: |
+      docker run --rm --name llama-coder --network host --init -v /mnt/llm-storage:/models
+      --entrypoint /src/build/bin/llama-server llama-rocm714-rpc:latest
+      -m /models/coder-next-q4/Huihui-Qwen3-Coder-Next-abliterated.i1-Q4_K_M.gguf
+      --rpc 127.0.0.1:50060,127.0.0.1:50061 -ngl 999 --host 127.0.0.1 --port ${PORT}
+      -c 262144 -np 8 -fa on -ctk q8_0 -ctv q8_0 --jinja -a coder
+    cmdStop: docker stop -t 20 llama-coder
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 0
+    checkEndpoint: /health
+
+  "deephat":
+    cmd: |
+      docker run --rm --name llama-deephat --network host --init -v /mnt/llm-storage:/models
+      --entrypoint /src/build/bin/llama-server llama-rocm714-rpc:latest
+      -m /models/deephat-v1/DeepHat-V1-7B.Q4_K_M.gguf
+      --rpc 127.0.0.1:50064,127.0.0.1:50065 -ngl 999 --host 127.0.0.1 --port ${PORT}
+      -c 32768 -np 4 -fa on -ctk q8_0 -ctv q8_0 --jinja -a deephat
+    cmdStop: docker stop -t 20 llama-deephat
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 0
+    checkEndpoint: /health
+
+  "thinking-80b":
+    cmd: |
+      docker run --rm --name llama-main --network host --init -v /mnt/llm-storage:/models
+      --entrypoint /src/build/bin/llama-server llama-rocm714-rpc:latest
+      -m /models/qwen3-next-thinking-abl/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.i1-Q5_K_M.gguf
+      --rpc 127.0.0.1:50052,127.0.0.1:50053 -ngl 999 --host 127.0.0.1 --port ${PORT}
+      -c 262144 -np 4 -fa on -ctk q8_0 -ctv q8_0 --jinja -a thinking-80b --no-warmup
+    cmdStop: docker stop -t 30 llama-main
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 1800
+    checkEndpoint: /health
+
+  "minimax":
+    cmd: sh /mnt/llm-storage/launch-minimax.sh ${PORT}
+    cmdStop: docker stop -t 40 llama-main
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 1800
+    checkEndpoint: /health
+
+  "mimo":
+    cmd: sh /mnt/llm-storage/launch-mimo.sh ${PORT}
+    cmdStop: docker stop -t 40 llama-main
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 86400
+    checkEndpoint: /health
+
+  "235b":
+    cmd: sh /mnt/llm-storage/launch-235b.sh ${PORT}
+    cmdStop: docker stop -t 60 llama-main
+    proxy: http://127.0.0.1:${PORT}
+    ttl: 1800
+    checkEndpoint: /health
