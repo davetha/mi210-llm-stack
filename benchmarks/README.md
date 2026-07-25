@@ -14,6 +14,19 @@ For the full architecture constraints behind these numbers, see [`docs/01-gfx90a
 
 ---
 
+## Standardized 13K-Token Prefill Benchmarks
+
+Cross-engine cold/hot prefill comparison with a deterministic ~13K token prompt.
+See [`benchmarks-13k-prefill.md`](./benchmarks-13k-prefill.md) for full details.
+
+| Setup | Cold Prefill (tok/s) | Hot Prefill (tok/s) | Cache Speedup | Decode (tok/s) |
+|---|---:|---:|---:|---:|
+| vLLM TP=1 (DSV2-Lite BF16) | 3,743 | 5,753 | 1.5× | 23.9 |
+| llama.cpp (DSV2-Lite q8_0) | 194 | 1,509 | 7.8× | 63.8 |
+| llama.cpp (mimo 230B) | 63 | 2,389 | 38× | 20.8 |
+
+---
+
 ## Summary Table
 
 ### vLLM (single MI210)
