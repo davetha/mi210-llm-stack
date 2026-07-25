@@ -394,3 +394,17 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 1. A newer vLLM stable release (not dev build 0.25.2.dev)
 2. Deep patching of vLLM's profiling code to handle ROCm errors
 3. Filing a bug report with the vLLM ROCm team
+
+### vLLM Version Check — User Feedback Addressed
+
+**User correctly pointed out**: should always check for newer versions before debugging.
+
+**Finding**: vLLM v0.26.0 released TODAY (2026-07-25). Includes:
+- #47388: "opt-in persistence and reuse of the memory-profiling result across boots" — directly fixes our profiling crash
+- #38641: "log worker exit code when a process dies unexpectedly" — better debugging
+- #45017: Triton num_stages=4 crash fix for gfx90a (Issue #44973)
+- Multiple ROCm-specific optimizations
+
+**Upgrade attempt**: Built vLLM 0.26.0+rocm714 from source in existing container. Build succeeded but PyNaCl/NCCL dependency chain is incompatible — `crypto_stream_salsa20_NONCEBYTES` constant missing from PyNaCl's C extension in all tested versions (1.4.0, 1.6.2). Worker processes fail NCCL communicator initialization.
+
+**Path forward**: Build a clean vLLM 0.26.0 ROCm container from scratch (not upgrading in-place). Or wait for official `rocm/vllm:rocm*_vllm0.26.0` Docker image.
