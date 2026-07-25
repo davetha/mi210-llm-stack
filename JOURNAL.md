@@ -284,3 +284,38 @@ docker run ... -m mimo-v25/UD-IQ2_XXS/UD-IQ2_XXS/MiMo-V2.5-UD-IQ2_XXS-00001-of-0
 - Room for smaller models simultaneously (14GB headroom)
 
 Full research report: `/mnt/llm-storage/dynamic-expert-quant-research.md` (324 lines)
+
+## Round 2: Deeper Optimization Research (2026-07-25)
+
+### Parameter Sweep Results
+Tested batch sizes, thread counts, OMP env vars on DSV2-Lite: **NO improvement** (all within 3% noise). llama.cpp parameter tuning is exhausted. The bottleneck is hardware/kernel-level, not parameter-level.
+
+### CPU/NUMA Tuning Applied
+- CPU governor: `schedutil` → `performance` ✅ (cores now at 3.2 GHz constant)
+- NUMA balancing: disabled ✅
+- numactl: installed ✅
+- THP: already `always` ✅
+- PCIe: both MI210s at Gen4 x16 (optimal) ✅
+- Memory: 8 channels at 2933 MT/s (not 3200, BIOS-configured)
+
+### Key Discovery: IQ2_XXS Dequant is the Bottleneck (Not Bandwidth)
+Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandwidth**. The bottleneck is the I-quant dequant kernel (lookup table + grid reconstruction), not memory streaming. K-quant kernels are dramatically faster on gfx90a.
+
+**Q2_K (~110GB) predicted to give 80-150 tok/s decode** (2-4× over IQ2_XXS) because K-quant HIP kernels don't have the I-quant compute bottleneck. This is the top next experiment.
+
+### Complete Bottleneck Ranking (Evidence-Based)
+1. **VRAM capacity wall** — Q4_K 174GB > 128GB VRAM forces CPU offload → 15 tok/s
+2. **IQ2_XXS dequant kernels slow** — Only 8% of HBM BW used → 41 tok/s (not bandwidth-bound!)
+3. **Kernel launch overhead** — 1500-2000 kernels/token without graphs → 20-40% overhead
+4. **CPU dequant compute-bound** — Q4_K AVX2 kernels achieve only 24% of theoretical BW
+5. **GPU↔CPU serialization** — No overlap, GPUs idle 75% during CPU phase
+6. **Prefill CPU-bound** — 392 tok/s vs 2000-3000 GPU ceiling
+7. **Memory at 2933 MT/s** — 8.3% reduction from 3200
+
+### KTransformers on AMD: Partially Feasible
+- Legacy stack (v0.2.x) had official gfx90a support (beta)
+- Modern stack (kt-kernel + SGLang-KT) has NEVER been run on AMD publicly
+- HIP scaffolding exists but is unvalidated
+- Build path: `CPUINFER_USE_ROCM=1 ./install.sh`
+- Estimated effort: 2-4 hours of build/debug
+- Performance estimate: 5-20 tok/s decode (comparable to current llama.cpp)
