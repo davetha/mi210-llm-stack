@@ -337,3 +337,15 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 - Not useful for interactive chat with varied content
 
 **Conclusion**: Speculative decoding doesn't help with IQ2_XXS because the dequant kernel bottleneck affects both main and draft models equally. Q2_K (faster K-quant kernels) is the prerequisite for speculative decoding to be beneficial.
+
+### ik_llama.cpp Investigation: NOT WORTH IT for AMD
+- Fork has 2-5× faster CPU kernels for Zen3/AVX2 (impressive)
+- BUT: ROCm/GPU backend is unmaintained, slower than mainline, crashes with FA
+- Maintainer explicitly states AMD GPU backends are NOT the focus
+- **Verdict**: CPU benefits negated by broken GPU backend. Stick with mainline llama.cpp for AMD MI210.
+
+### Q2_K DSV2-Lite Validation Test
+- Converted DSV2-Lite Q8_0 (16GB) → Q2_K (6GB) via `llama-quantize --allow-requantize`
+- Benchmark: Q2_K 23.2 tok/s vs Q8_0 23.6 tok/s — **identical** on small model
+- **Finding**: Small models are kernel-launch-bound, not dequant-bound. Quant type doesn't matter at this scale.
+- **Implication**: The K-quant vs I-quant difference only manifests at large scale (MiMo 310B). Kimi's prediction that IQ2_XXS uses only 8% of HBM BW on MiMo is consistent — the dequant overhead scales with model size.
