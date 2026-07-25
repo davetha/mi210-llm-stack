@@ -200,3 +200,58 @@ Enables: 2-bit KV cache quantization on GPU (4× K cache compression vs q8_0)
 | Current measured | 392 tok/s | ~15 tok/s | TurboQuant binary helps |
 | All-VRAM (if model fit) | ~800-1,200 tok/s | ~24-42 tok/s | Dynamic expert quant needed |
 | Target (8700 tok/s) | 8,700 tok/s | — | Requires 8× H100 class |
+
+## Track N: Dynamic Expert Quantization Research (✅ COMPLETE)
+
+### The Opportunity
+The DDR4 bottleneck (23 CPU layers at 50 GB/s) is the root cause of slow decode. If the model fit entirely in VRAM, decode would jump from 2.7 tok/s to 24-42 tok/s (10-16×). Dynamic expert quantization (experts at 2-bit, attention at 4-bit) could shrink mimo from 174GB to ~84GB, fitting in 128GB VRAM.
+
+### Key Findings
+
+1. **Model is actually 310B params** (not 230B — MiMo-V2.5 is 310B/15B active with 256 routed experts, 8 per token). The "230B" figure was likely confused with DeepSeek-V2.5's 236B.
+
+2. **Experts dominate**: 97.7% of parameters (302.7B of 310B) are in MoE expert tensors. Each MoE layer has 3 packed 3D expert tensors: `ffn_gate_exps` [4096, 2048, 256], `ffn_up_exps` [4096, 2048, 256], `ffn_down_exps` [2048, 4096, 256].
+
+3. **Pre-made low-bit quants ALREADY EXIST on HuggingFace**:
+   - `unsloth/MiMo-V2.5-GGUF`: UD-IQ2_XXS (~84GB), UD-IQ3_S, UD-IQ4_XS (Unsloth Dynamic 2.0 = sensitivity-tiered per-tensor quant)
+   - `bartowski/MiMo-V2.5-GGUF`: IQ2_XXS (83.61GB), IQ2_XS (93.07GB), Q2_K (108.94GB), IQ3_XXS (130.25GB)
+   - **BUT**: both are NON-abliterated. huihui-ai only publishes Q4_K of the abliterated variant.
+
+4. **GGUF→GGUF re-quantization is supported**: `llama-quantize --allow-requantize --tensor-type "\.ffn_.*_exps\.=IQ2_XXS"` — no FP16 original needed. The TurboQuant fork has this capability at `tools/quantize/quantize.cpp`.
+
+5. **80GB target is tight**: IQ2_XXS (83.6GB) slightly exceeds it. Counterintuitively, a "dynamic" build (experts IQ2 + attention Q4) is *larger* than uniform IQ2_XXS. To fit ≤80GB with abliteration requires a sensitivity-tiered scheme (most experts IQ2_XXS, least-sensitive IQ1_S).
+
+6. **KV cache budget can flex**: MiMo-V2.5 has GQA (8 KV heads) + sliding window attention. KV per token is small. For 256K context: ~20-30GB KV cache. So 84GB model + 30GB KV = fits in 128GB with 14GB headroom.
+
+### Recommended Path
+
+**Option A — Download pre-made (fastest, loses abliteration):**
+```bash
+huggingface-cli download unsloth/MiMo-V2.5-GGUF --include "*UD-IQ2_XXS*" \
+  --local-dir /mnt/llm-storage/mimo-v25/UD-IQ2_XXS/
+```
+Zero-compute, validates concept immediately. ~84GB download.
+
+**Option B — Re-quantize existing Q4_K (keeps abliteration, ~3-5h CPU):**
+```bash
+# Build llama-quantize in TurboQuant fork
+cd /mnt/llm-storage/turbo-build/src && cmake --build build --target llama-quantize
+# Re-quantize: experts to IQ2_XXS, keep attention/embed at Q4_K
+./build/bin/llama-quantize \
+  mimo-v25/Q4_K/Huihui-MiMo-V2.5-abliterated-Q4_K-00001-of-00021.gguf \
+  mimo-v25/IQ2-dynamic/Huihui-MiMo-V2.5-abliterated-IQ2-dynamic.gguf \
+  IQ2_XXS --allow-requantize \
+  --tensor-type "\.ffn_.*_exps\.=IQ2_XXS"
+```
+
+**Option C — Custom Unsloth-style sensitivity tiers (highest quality, most effort):**
+Use imatrix calibration to determine per-tensor sensitivity, then assign IQ2_XXS to robust experts and IQ1_S to noise-tolerant ones. Target ~78GB.
+
+### Expected Impact
+- Model fits entirely in VRAM (84GB model + 30GB KV + 14GB headroom = 128GB)
+- **Decode: 2.7 → 24-42 tok/s (10-16× speedup)**
+- **Prefill: 392 → 800-1,200 tok/s (2-3× speedup)**
+- 256K context becomes comfortable
+- Room for smaller models simultaneously (14GB headroom)
+
+Full research report: `/mnt/llm-storage/dynamic-expert-quant-research.md` (324 lines)
