@@ -367,3 +367,30 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 **K-quant kernel theory CONFIRMED**: Q2_K_L is 1.33× faster than IQ2_XXS because K-quant HIP dequant kernels are simpler/faster than I-quant lookup-table kernels on gfx90a. Kimi predicted 2-4× but actual is 1.33× — the remaining gap is kernel launch overhead (1500-2000 launches/token = 20-40% of decode time).
 
 **Q2_K_L is the NEW BEST decode configuration**: 54.6 tok/s with 13GB VRAM headroom. Trade-off vs IQ2_XXS: faster decode but less headroom (13GB vs 26GB) and slower prefill (181 vs 218 tok/s).
+
+### FIX-1: HIP Graph Capture Crash — FIXED ✅
+
+**Root cause**: FLASH_ATTN_EXT kernel uses ROCm-incompatible operations during HIP graph capture on gfx90a. The "operation not permitted when stream is capturing" error causes `CUDA_CHECK` to abort.
+
+**Fix**: Added `GGML_OP_FLASH_ATTN_EXT` check to `ggml_cuda_graph_check_compability()` in `ggml-cuda.cu`. When FA is detected in the computation graph, graph capture is automatically disabled. 3-line addition, clean fix.
+
+**Result**: No more `GGML_CUDA_DISABLE_GRAPHS=1` env var needed. Binary auto-detects and handles the ROCm limitation. Verified: MiMo Q2_K_L decodes at 54.8 tok/s with no crash, no env var.
+
+### FIX-2: vLLM Weight-Loading — BLOCKED by Profiling Crash
+
+**Root cause**: vLLM workers (TP0, TP1) crash during the memory profiling forward pass on ROCm/gfx90a. Weight loading itself succeeds (TP1 loaded 15.27 GiB in 37s). The crash happens AFTER loading, during the profiling forward pass that measures peak memory.
+
+**Key finding**: `--load-format dummy` works because dummy weights don't trigger the CUDA error in profiling. Real weights cause a CUDA error during the profiling forward pass that kills the worker processes (they become zombies).
+
+**What doesn't work**:
+- `load_format="safetensors"` — weights load but profiling crashes workers
+- `num_gpu_blocks_override=5000` — profiling still runs, still crashes
+- `VLLM_WORKER_MULTIPROC_METHOD=spawn` — same crash
+- `VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1` — same crash
+
+**Root cause hypothesis**: A Triton kernel or CUDA operation in the profiling forward pass is incompatible with gfx90a when using real model weights. The profiling forward pass exercises all model operations including MoE expert routing, MLA attention, and quantized GEMMs.
+
+**Resolution path**: Requires either:
+1. A newer vLLM stable release (not dev build 0.25.2.dev)
+2. Deep patching of vLLM's profiling code to handle ROCm errors
+3. Filing a bug report with the vLLM ROCm team
