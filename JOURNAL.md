@@ -349,3 +349,21 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 - Benchmark: Q2_K 23.2 tok/s vs Q8_0 23.6 tok/s — **identical** on small model
 - **Finding**: Small models are kernel-launch-bound, not dequant-bound. Quant type doesn't matter at this scale.
 - **Implication**: The K-quant vs I-quant difference only manifests at large scale (MiMo 310B). Kimi's prediction that IQ2_XXS uses only 8% of HBM BW on MiMo is consistent — the dequant overhead scales with model size.
+
+### ✅ VERIFIED: Q2_K_L All-VRAM Test Results (2026-07-25)
+
+**Downloaded**: bartowski/MiMo-V2.5-GGUF Q2_K_L (103GB, 3 shards) — non-abliterated
+
+**Launch config**: `-ngl 999` (ALL layers on GPU) + `-fa on -ctk q8_0 -ctv f16 -c 32768` + `GGML_CUDA_DISABLE_GRAPHS=1` + `OMP_PROC_BIND=true`
+
+**Results**:
+
+| Config | Decode | Prefill | VRAM Used | Headroom | vs Production |
+|---|---|---|---|---|---|
+| Q4_K production (hybrid) | 15 tok/s | 392 tok/s | ~91GB GPU + CPU | None | 1× (baseline) |
+| IQ2_XXS all-VRAM | 41 tok/s | ~218 tok/s | 101.8GB | 26.2GB | 2.7× decode |
+| **Q2_K_L all-VRAM** | **54.6 tok/s** | 181 tok/s | 115GB | 13GB | **3.64× decode** |
+
+**K-quant kernel theory CONFIRMED**: Q2_K_L is 1.33× faster than IQ2_XXS because K-quant HIP dequant kernels are simpler/faster than I-quant lookup-table kernels on gfx90a. Kimi predicted 2-4× but actual is 1.33× — the remaining gap is kernel launch overhead (1500-2000 launches/token = 20-40% of decode time).
+
+**Q2_K_L is the NEW BEST decode configuration**: 54.6 tok/s with 13GB VRAM headroom. Trade-off vs IQ2_XXS: faster decode but less headroom (13GB vs 26GB) and slower prefill (181 vs 218 tok/s).
