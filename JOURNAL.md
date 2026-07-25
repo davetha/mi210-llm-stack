@@ -319,3 +319,21 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 - Build path: `CPUINFER_USE_ROCM=1 ./install.sh`
 - Estimated effort: 2-4 hours of build/debug
 - Performance estimate: 5-20 tok/s decode (comparable to current llama.cpp)
+
+### Speculative Decoding Tests (NEW)
+
+**MTP (Multi-Token-Prediction) — `--spec-type draft-mtp`:**
+- MiMo-V2.5 has a built-in 329M MTP head (blk.49/50.nextn.* tensors)
+- The TurboQuant fork supports `--spec-type draft-mtp` flag
+- **MTP WORKS mechanically**: 72% draft acceptance rate (13/18 tokens accepted)
+- **BUT it's 4.5× SLOWER** (9 tok/s vs 41 tok/s baseline)
+- Root cause: IQ2_XXS dequant kernels make the draft forward pass too expensive
+- The 329M MTP head uses the same slow I-quant kernels as the main model
+- **Prediction: MTP would be net-positive with Q2_K** (faster K-quant kernels reduce draft overhead)
+
+**ngram-simple — `--spec-type ngram-simple`:**
+- No improvement (42.5 vs 41 tok/s — within noise)
+- Only helps with repetitive text patterns
+- Not useful for interactive chat with varied content
+
+**Conclusion**: Speculative decoding doesn't help with IQ2_XXS because the dequant kernel bottleneck affects both main and draft models equally. Q2_K (faster K-quant kernels) is the prerequisite for speculative decoding to be beneficial.
