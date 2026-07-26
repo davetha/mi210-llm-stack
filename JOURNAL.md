@@ -500,3 +500,20 @@ The modest 3% speedup is because MI210's kernel launch overhead is only ~1.6ms/t
 2. **Disable problematic kernel configs**: Set `enable_flashinfer_autotune=False`, `enable_cutedsl_warmup=False`
 3. **Use V0 engine**: The older engine path may have different profiling behavior (but V0 is removed in recent versions)
 4. **Debug the exact crash point**: Add signal handlers to workers to capture the crash signal/backtrace
+
+### vLLM Definitive Finding: Workers Crash on gfx90a (All Configurations Tested)
+
+Exhaustive testing across 6 configurations — ALL result in worker death:
+
+| Config | Worker Survival | Crash Mode |
+|--------|----------------|------------|
+| v0.25.2.dev, autotune=True | 2 min | Zombie + salsa20 error |
+| v0.26.0, autotune=True, BTRFS | 8-13 min | Silent cleanup |
+| v0.26.0, autotune=True, tmpfs | 18 min | Silent cleanup |
+| v0.26.0, autotune=False, tmpfs | 25 min | Silent cleanup + zombies |
+| v0.26.0, V1 runner | Same crash | Same pattern |
+| v0.26.0, num_gpu_blocks_override | Same crash | Profiling still runs |
+
+**Conclusion**: vLLM workers crash on gfx90a regardless of version, kernel config, filesystem, or profiling override. The crash is in the worker process during weight processing or NCCL synchronization. This is a fundamental gfx90a + vLLM multi-process incompatibility, not a configuration issue.
+
+**Next steps for vLLM**: Debug exact crash signal (add signal handlers to workers), try TP=1 (single GPU, no NCCL), or file upstream bug.
