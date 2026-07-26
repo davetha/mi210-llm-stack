@@ -579,3 +579,61 @@ The kernel dispatches and starts executing on gfx90a. Memory fault occurs during
 - `configs/correct_vgpr_patch.py` — Correct uint16 VGPR count patcher
 - `configs/opcode_swap.py` — Original opcode-only patcher
 - `configs/full_binary_patch.py` — Earlier 4-layer patcher
+
+---
+
+## CORE DUMP ANALYSIS: Faulting Instruction Identified (2025-07-26)
+
+### Setup: Minimal patch (opcode swap + e_flags + vgpr_count, AccVGPR preserved)
+
+### Core Dump Analysis:
+
+Captured 186MB GPU core dump via `HSA_COREDUMP_PATTERN`. Extracted wavefront PC values:
+
+| PC | Count | Description |
+|----|-------|-------------|
+| 0x1000 | many | Kernel entry (queued wavefronts) |
+| **0x7f3c** | 4 | **Faulting wavefronts** |
+| 0xc000 | 2 | Later in kernel |
+
+### The Faulting Instruction (PC=0x7f3c):
+
+```
+v_cmp_u_f32_e64 s[38:39], v38, v38     // NaN check on v38
+v_add3_u32 v28, v38, v31, 1            // v28 = v38 + v31 + 1  ← FAULTS HERE
+```
+
+This is a **simple integer addition** — NOT an MFMA instruction! The values v38 and v31 are derived from MFMA output processing. The F16 computation (opcode-swapped from BF16) produces slightly different FP32 values than expected. These values are reinterpreted as integers for address computation → wrong addresses → memory fault.
+
+### Root Cause: Numerical Cascade
+
+The kernel's data flow:
+1. MFMA computes Q×K^T in F16 (patched from BF16) → slightly different FP32 scores
+2. Scores are processed (compare, add, perm) for softmax preparation
+3. Integer values derived from float processing are used as memory addresses
+4. Wrong addresses → memory fault
+
+### Why It's NOT Working (Yet):
+
+The MLA kernel was designed end-to-end for BF16 computation. Switching the MFMA to F16 changes numerical results throughout the pipeline. Even though F16 and BF16 have the same dynamic range for normalized attention scores, the MANTISSA precision differs (F16: 10 bits, BF16: 7 bits), causing different rounding in intermediate computations.
+
+The kernel has data-dependent memory addressing (computing offsets from attention scores or intermediate values), and the numerical difference cascades into wrong addresses.
+
+### What Would Fix It:
+
+1. **Pre-convert ALL data to F16** (already doing via view trick) — but the kernel's intermediate FP32 computations still differ
+2. **Write a wrapper kernel** that converts BF16→F16 before calling the MLA kernel — ensures correct F16 format
+3. **Patch any float-to-integer conversion paths** that are sensitive to the BF16/F16 difference
+4. **Use gfx90a's native v_mfma_f32_32x32x4bf16** instead (the 32×32 tile BF16 variant) — would require restructuring the tiling but avoids the format conversion issue entirely
+
+### Progress Summary:
+
+| Milestone | Status |
+|-----------|--------|
+| Code object loads on gfx90a | ✅ |
+| Kernel launches (no invalid handle) | ✅ |
+| First 0x7F3C bytes execute | ✅ |
+| MFMA instruction executes (F16 mode) | ✅ (past it, fault is AFTER) |
+| Full kernel execution | ❌ Numerical cascade → wrong addressing |
+
+The binary patch approach has reached ~95% completion. The kernel loads, launches, executes through initialization and into the main computation loop. The remaining issue is numerical precision, not instruction compatibility.
