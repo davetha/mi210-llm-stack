@@ -621,3 +621,115 @@ All patches verified present and compiling:
 **Files delivered:**
 - `configs/fa_wrapper.cpp` — The bridge code (ready to compile in proper dev env)
 - `configs/build_fa_wrapper4.py` — Build script with comprehensive CUDA stub generation
+
+---
+
+## AITER Ecosystem Discovery — GAME CHANGER (2025-07-25)
+
+### The Discovery
+
+While investigating Triton integration, discovered that **AITER (AMD Inference Tuning and Extension Repository)** is not just flash attention — it's a **complete inference kernel library with 397 public functions** covering the entire LLM inference pipeline.
+
+**Most critically**: AITER contains **purpose-built MLA (Multi-head Latent Attention) operations** designed specifically for DeepSeek-V2/V3-style architectures like MiMo-V2.5.
+
+### Verified Performance (CK Flash Attention)
+
+| Kernel | Time | Speed | Diff vs SDPA |
+|--------|------|-------|-------------|
+| AITER CK `flash_attn_func` | 2.06ms | **1,985,756 tok/s** | 0.0020 |
+| flash_attn 2.8.3 (CK backend) | 2.08ms | 1,967,134 tok/s | 0.0020 |
+| PyTorch SDPA (reference) | 2.33ms | 1,757,190 tok/s | 0.0000 |
+
+AITER CK is **13% faster** than PyTorch SDPA. The JIT system detects gfx90a and compiles CK templates natively. `ENABLE_CK: True` for MI210.
+
+### MLA-Specific Operations Found
+
+These are the operations most relevant to MiMo-V2.5:
+
+**Prefill:**
+- `mla_prefill_asm_fwd` — MLA prefill with assembly-optimized kernels
+- `mla_prefill_ps_asm_fwd` — MLA persistent prefill (eliminates kernel launch overhead)
+
+**Decode:**
+- `mla_decode_stage1_asm_fwd` — MLA decode stage 1 (metadata + routing)
+- `hk_mla_decode_fwd` — "Hummingbird" MLA decode
+
+**Fused operations:**
+- `fused_qk_rope_concat_and_cache_mla` — **SUPER-FUSED**: Q norm + K norm + RoPE + cache concat in ONE kernel (eliminates 3 kernel launches per layer!)
+- `concat_and_cache_mla` — MLA KV cache management
+
+**Sparse MLA:**
+- `unified_attention_sparse_mla` — Unified sparse MLA attention
+- `mla_decode_rope` — MLA decode with fused RoPE (in `aiter/ops/triton/attention/mla_decode_rope.py`)
+
+### Complete Operation Coverage
+
+AITER has optimized kernels for EVERY component MiMo needs:
+
+| MiMo Component | AITER Solution | Functions |
+|---------------|----------------|-----------|
+| MLA attention | `mla_prefill/decode_asm_fwd` | 11+ |
+| MoE (256 experts) | `ck_moe_stage1/2`, `fmoe_g1u1` | 28+ |
+| GEMM | `gemm_a8w8`, `batched_gemm_bf16_CK` | 40+ |
+| RMSNorm | `rmsnorm2d_fwd_with_add_ck` | 18+ |
+| RoPE | `rope_cached_positions_fwd` | 20+ |
+| TopK routing | `topk_softmax`, `grouped_topk` | 13+ |
+| Quantization | `per_token_quant_hip` | 15+ |
+| KV cache | `reshape_and_cache_flash` | 10+ |
+
+### 22 Attention Variants Available
+
+Beyond MLA, AITER has specialized attention for every architecture:
+- Standard FA2 (CK), FA v3 (fmha_v3), FP8 attention
+- Paged Attention (pa_fwd_asm, pa_persistent_fwd, pa_decode_gluon)
+- Lean Attention, POD Attention, HSTU Attention
+- Unified Attention (supports MLA mode)
+- Chunked PA Prefill, Extend Attention
+
+### Framework Landscape (Corrected)
+
+Earlier documentation incorrectly listed tokenspeed-mla, humming-kernels, and flashinfer as installed. **Corrected inventory**:
+
+| Framework | Status | Version |
+|-----------|--------|---------|
+| AITER | ✅ Working | 0.1.13.post2.dev1 |
+| CK (via AITER JIT) | ✅ Compiles for gfx90a | — |
+| Triton (AMD fork) | ✅ Working | 3.7.1+rocm7.14.0 |
+| flash_attn (CK backend) | ✅ Working | 2.8.3 |
+| PyTorch | ✅ Working | 2.11.0+rocm7.14.0 |
+| tilelang | ✅ Imports, untested | 0.1.10 |
+| conch-triton-kernels | ✅ Imports, contents TBD | 1.2.1 |
+| vLLM (editable) | ✅ TP=1, ❌ TP=2 | 0.25.2.dev0 |
+| **tokenspeed-mla** | ❌ NOT installed | — |
+| **humming-kernels** | ❌ NOT installed | — |
+| **flashinfer** | ❌ NOT installed (needs gfx942+) | — |
+
+### Integration Strategy Update
+
+This discovery changes the integration approach:
+
+**Previous plan**: Patch flash attention into llama.cpp C++ (blocked by ROCm 7.14 dropping CUDA compat headers)
+
+**New plan**: Use AITER as a Python sidecar that handles MLA + MoE + attention offload:
+1. llama.cpp runs as the orchestration layer (tensor ops, weight loading, tokenization)
+2. AITER Python process handles attention (MLA prefill/decode), MoE routing, and optionally RMSNorm/RoPE
+3. Communication via shared memory or IPC
+
+**Why this is better**:
+- No C++ compilation needed (bypasses ROCm 7.14 header issue)
+- Access to ALL 397 AITER operations, not just flash attention
+- Purpose-built MLA kernels instead of generic flash attention
+- Fused operations (fused_qk_rope_concat_and_cache_mla) eliminate multiple kernel launches
+
+### Documentation Files Created
+
+- `docs/12-aiter-ecosystem-discovery.md` — Complete 397-function inventory
+- `docs/13-framework-landscape.md` — Corrected framework inventory
+- `changes/15-aiter-mla-discovery.md` — MLA operations deep dive
+
+### Next Steps
+
+1. **Kitchen sink testing**: Benchmark every attention variant on MI210
+2. **MLA prefill/decode testing**: Test with MiMo-shaped tensors
+3. **Python sidecar design**: Architecture for llama.cpp ↔ AITER communication
+4. **MoE testing**: Verify ck_moe_stage1/2 work on gfx90a
