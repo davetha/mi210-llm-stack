@@ -1,6 +1,6 @@
 # AITER Ecosystem Discovery on MI210 (gfx90a)
 
-**Date**: 2025-07-25
+**Date**: 2026-07-25
 **Platform**: AMD Instinct MI210, gfx90a, 64GB VRAM, ROCm 7.14
 **Container**: `fa-build` (PyTorch 2.11.0+rocm7.14.0, Python 3.14)
 **AITER Version**: `0.1.13.post2.dev1+gb32deb267`

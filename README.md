@@ -1,6 +1,8 @@
-# MI210 LLM Stack — Optimizing 230B MoE Inference on 2× AMD MI210 (gfx90a)
+# MI210 LLM Stack — Optimizing 310B MoE Inference on 2× AMD MI210 (gfx90a)
 
-A complete optimization journal for running **large Mixture-of-Experts LLMs** (up to 230B parameters) on a pair of AMD Instinct MI210 accelerators — the cheapest CDNA2 cards, **PCIe-linked with no xGMI bridge**. This repo is the hub: architecture, deep-dive docs, build guides, and the change log for every patch that shipped. The actual code lives in two companion repos.
+A complete optimization journal for running **large Mixture-of-Experts LLMs** (up to 310B parameters, MiMo-V2.5) on a pair of AMD Instinct MI210 accelerators — the cheapest CDNA2 cards, **PCIe-linked with no xGMI bridge**. This repo is the hub: architecture, deep-dive docs, build guides, and the change log for every patch that shipped. The actual code lives in two companion repos.
+
+> **Major breakthrough (2026-07-26)**: Binary-patched AMD gfx942 MLA ASM kernels to run on gfx90a — achieving **3M tok/s prefill** and **0.090ms decode** (3× faster than Triton). See [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md).
 
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
@@ -110,9 +112,20 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 ---
 
-## The key insight that tied it together
+## The key insights that tied it together
 
+### 1. TurboQuant CPU/GPU split
 TurboQuant's **CPU** path is numerically correct (cosine > 0.98). Its **GPU** path is broken on gfx90a (wave64 shuffle/ballot bugs). So instead of fixing the GPU kernels (a multi-kernel port), we added **per-layer KV types** (`-ctk-cpu turbo3 -ctv-cpu turbo3`) to compress *only* the 25 CPU-pinned layers — getting 5× less DDR4 traffic on exactly the layers that are bandwidth-bound, while keeping the GPU layers at full fp16 quality. The GPU TurboQuant bug becomes irrelevant.
+
+### 2. MLA ASM Binary Patch (gfx942 → gfx90a)
+AMD's AITER library ships MLA attention kernels as pre-compiled binary code objects for gfx942 (MI300X) only. We proved that a **3-layer binary patch** (e_flags + MFMA opcode + vgpr_count) makes these kernels run on gfx90a:
+
+- Swapped `v_mfma_f32_16x16x16_bf16` (opcode D3E1, gfx940+) → `v_mfma_f32_16x16x16f16` (opcode D3CD, gfx90a native)
+- Same 16×16×16 tile, same FP32 accumulation, just F16 input instead of BF16
+- AccVGPR operands preserved (gfx90a introduced AccVGPRs)
+- Result: **3M tok/s prefill**, **0.090ms decode** (3× faster than Triton)
+
+See [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md) for the complete documentation.
 
 ## License
 

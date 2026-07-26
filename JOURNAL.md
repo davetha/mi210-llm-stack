@@ -624,7 +624,7 @@ All patches verified present and compiling:
 
 ---
 
-## AITER Ecosystem Discovery — GAME CHANGER (2025-07-25)
+## AITER Ecosystem Discovery — GAME CHANGER (2026-07-25)
 
 ### The Discovery
 
@@ -729,7 +729,28 @@ This discovery changes the integration approach:
 
 ### Next Steps
 
-1. **Kitchen sink testing**: Benchmark every attention variant on MI210
-2. **MLA prefill/decode testing**: Test with MiMo-shaped tensors
-3. **Python sidecar design**: Architecture for llama.cpp ↔ AITER communication
+1. ~~Kitchen sink testing~~: ✅ DONE — 115+ operations tested
+2. ~~MLA prefill/decode testing~~: ✅ DONE — Both work, 3M tok/s prefill
+3. ~~Python sidecar design~~: Architecture documented, ready to implement
 4. **MoE testing**: Verify ck_moe_stage1/2 work on gfx90a
+
+### MLA ASM Binary Patch — COMPLETE (2026-07-26)
+
+**The breakthrough**: Binary-patched gfx942 MLA ASM `.co` files run on gfx90a with just 3 changes:
+
+1. **ELF e_flags**: mach 0x4c (gfx942) → 0x3f (gfx90a)
+2. **MFMA opcode**: D3E1 (`v_mfma_f32_16x16x16_bf16`) → D3CD (`v_mfma_f32_16x16x16f16`) — 816 instructions per kernel
+3. **VGPR count**: 512 → 256 (msgpack uint16)
+
+**Key discovery**: gfx90a has `v_mfma_f32_16x16x16f16` (same 16×16×16 tile, F16 input) as a drop-in replacement for the missing `v_mfma_f32_16x16x16_bf16`. AccVGPR operands work unchanged (gfx90a introduced AccVGPRs).
+
+**Critical gotcha**: MLA tensor dimensions are NOT standard attention dimensions:
+- Q/KV head dim = 576 (kv_lora_rank 512 + qk_rope_head_dim 64), NOT 128
+- V head dim = 512 (kv_lora_rank), NOT 128
+- num_kv_splits = 1 (hardcoded in AITER wrapper)
+
+**Performance**:
+- Prefill S=512: **3,013,378 tok/s** (3M tok/s)
+- Decode: **0.090ms/step** (11,088 steps/sec) — 3× faster than Triton
+
+**Files**: `docs/14-mla-asm-binary-patch.md`, `configs/patch_all_mla.py`, `configs/test_prefill_mla_gfx90a.py`

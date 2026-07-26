@@ -1,6 +1,6 @@
 # Kitchen Sink Results: AITER Operations on MI210 (gfx90a)
 
-**Date**: 2025-07-25
+**Date**: 2026-07-25
 **Platform**: AMD Instinct MI210, gfx90a, ROCm 7.14
 **Container**: `fa-build` (PyTorch 2.11+rocm7.14.0, AITER 0.1.13)
 **Patches Applied**: 1 (opus.hpp FP8 guard)
@@ -288,7 +288,7 @@ Triton kernels are Python source code that JIT-compiles to the native architectu
 
 ---
 
-## UPDATE: Binary Code Object Patching Experiment (2025-07-26)
+## UPDATE: Binary Code Object Patching Experiment (2026-07-26)
 
 ### Can gfx942 .co Files Run on gfx90a?
 
@@ -334,7 +334,7 @@ EF_AMDGPU_MACH_AMDGCN_GFX950 = 0x04f
 
 ---
 
-## UPDATE: Triton MLA Decode WORKS on gfx90a (2025-07-26)
+## UPDATE: Triton MLA Decode WORKS on gfx90a (2026-07-26)
 
 ### BREAKTHROUGH: All configurations pass with num_kv_splits=1
 
@@ -372,7 +372,7 @@ At 0.13ms per decode step for 128-head MLA, this is viable for production use. T
 
 ---
 
-## BREAKTHROUGH: MFMA Emulation PROVEN on gfx90a (2025-07-26)
+## BREAKTHROUGH: MFMA Emulation PROVEN on gfx90a (2026-07-26)
 
 ### The Emulation Works
 
@@ -429,7 +429,7 @@ This gives native MLA performance on gfx90a without any binary patching or emula
 
 ---
 
-## BREAKTHROUGH: Binary Opcode Swap D3E1→D3CD (2025-07-26)
+## BREAKTHROUGH: Binary Opcode Swap D3E1→D3CD (2026-07-26)
 
 ### The Experiment
 
@@ -502,7 +502,7 @@ The files for this work:
 
 ---
 
-## FULL BINARY PATCH ATTEMPT: All Layers Patched (2025-07-26)
+## FULL BINARY PATCH ATTEMPT: All Layers Patched (2026-07-26)
 
 ### Three-Layer Patch Applied:
 
@@ -547,7 +547,7 @@ This is a full binary translation of the AccVGPR→VGPR register convention, not
 
 ---
 
-## LAYER 5 COMPLETE: Full Binary Translation Status (2025-07-26)
+## LAYER 5 COMPLETE: Full Binary Translation Status (2026-07-26)
 
 ### ALL 7 Patch Layers Applied:
 
@@ -582,7 +582,7 @@ The kernel dispatches and starts executing on gfx90a. Memory fault occurs during
 
 ---
 
-## CORE DUMP ANALYSIS: Faulting Instruction Identified (2025-07-26)
+## CORE DUMP ANALYSIS: Faulting Instruction Identified (2026-07-26)
 
 ### Setup: Minimal patch (opcode swap + e_flags + vgpr_count, AccVGPR preserved)
 
@@ -640,7 +640,7 @@ The binary patch approach has reached ~95% completion. The kernel loads, launche
 
 ---
 
-## ZERO-INPUT TEST + KERNEL DESCRIPTOR PATCH (2025-07-26)
+## ZERO-INPUT TEST + KERNEL DESCRIPTOR PATCH (2026-07-26)
 
 ### Zero Input Test Result:
 Tested with ALL ZEROS input (Q=0, KV=0). Kernel STILL memory faults.
@@ -679,7 +679,7 @@ an architectural dependency that binary patching cannot resolve.
 
 ---
 
-## *** BREAKTHROUGH: MLA ASM DECODE WORKS ON GFX90A! *** (2025-07-26)
+## *** BREAKTHROUGH: MLA ASM DECODE WORKS ON GFX90A! *** (2026-07-26)
 
 ### The Decode Kernel EXECUTES SUCCESSFULLY!
 
@@ -722,7 +722,7 @@ MFMA computation. The patched MFMA instructions themselves work perfectly.
 
 ---
 
-## *** MLA ASM DECODE: REAL COMPUTATION + 3× FASTER THAN TRITON! *** (2025-07-26)
+## *** MLA ASM DECODE: REAL COMPUTATION + 3× FASTER THAN TRITON! *** (2026-07-26)
 
 ### The Patched Kernel COMPUTES REAL ATTENTION VALUES!
 
@@ -784,7 +784,7 @@ The gfx942 MLA ASM kernel has been successfully binary-patched for gfx90a:
 
 ---
 
-## *** MLA ASM PREFILL WORKS! 3 MILLION TOK/S! *** (2025-07-26)
+## *** MLA ASM PREFILL WORKS! 3 MILLION TOK/S! *** (2026-07-26)
 
 ### ROOT CAUSE OF ALL PREFILL CRASHES: Wrong Tensor Shapes!
 

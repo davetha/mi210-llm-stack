@@ -1,6 +1,6 @@
 # Framework Landscape on MI210 (gfx90a)
 
-**Date**: 2025-07-25
+**Date**: 2026-07-25
 **Platform**: AMD Instinct MI210, gfx90a, ROCm 7.14
 **Container**: `fa-build`
 
