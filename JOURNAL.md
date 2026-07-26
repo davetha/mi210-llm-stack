@@ -477,3 +477,26 @@ The modest 3% speedup is because MI210's kernel launch overhead is only ~1.6ms/t
 2. Stage models on internal tmpfs (not volume-mounted host /dev/shm)
 3. Persist Triton JIT cache across restarts (`TRITON_CACHE_DIR`)
 4. Test Qwen3-235B-GPTQ-Int4 with torch.compile (expected: 25K+ tok/s)
+
+### vLLM 0.26.0 Final Test — Profiling Crash Persists (Handled More Gracefully)
+
+**Test**: vLLM 0.26.0, DSV2-Lite on internal tmpfs (/dev/shm, 48GB shm-size), TP=2, enforce_eager
+
+**Result**: Workers load weights successfully (TP1: 34s, TP0: completed) but **silently die during profiling phase** after ~8-13 minutes.
+
+| Metric | v0.25.2.dev | v0.26.0 |
+|--------|-------------|---------|
+| Worker death mode | Zombie processes (visible) | Silent cleanup (processes vanish) |
+| Time to crash after load | ~2 min | ~8-13 min |
+| Error message | `KeyError: crypto_stream_salsa20` | None (silent) |
+| Main process | Dies with workers | Hangs at 2.7% CPU |
+
+**Conclusion**: v0.26.0's profiling code is more robust (survives longer, handles errors gracefully) but the **underlying gfx90a profiling crash persists**. The profiling forward pass triggers a CUDA/HIP operation that is incompatible with gfx90a, killing workers regardless of vLLM version.
+
+**Root cause hypothesis**: A Triton kernel or CUDA operation in the profiling forward pass is incompatible with gfx90a/CDNA2. The `enable_flashinfer_autotune=True` and `enable_cutedsl_warmup=True` settings in the kernel config may trigger kernel compilation/execution that fails on gfx90a.
+
+**Path forward for vLLM on MI210**:
+1. **Patch vLLM to skip profiling**: Force a fixed KV cache block count without running the profiling forward pass
+2. **Disable problematic kernel configs**: Set `enable_flashinfer_autotune=False`, `enable_cutedsl_warmup=False`
+3. **Use V0 engine**: The older engine path may have different profiling behavior (but V0 is removed in recent versions)
+4. **Debug the exact crash point**: Add signal handlers to workers to capture the crash signal/backtrace
