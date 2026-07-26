@@ -458,3 +458,22 @@ The modest 3% speedup is because MI210's kernel launch overhead is only ~1.6ms/t
 - Fix: stage model on /dev/shm (tmpfs) before loading
 
 **Root cause of BTRFS slowness**: BTRFS compression makes random reads 24x slower than sequential. Safetensors loading does many small reads across shards. TP0 reads from cold cache while TP1 reads from warm cache (already in page cache from model discovery).
+
+### vLLM 0.26.0 TMPFS Test — BREAKTHROUGH FINDING
+
+**Key result**: vLLM 0.26.0 workers **DO NOT CRASH** during profiling phase on gfx90a.
+
+| Metric | v0.25.2.dev | v0.26.0 |
+|--------|-------------|---------|
+| Worker survival after weight load | 2 min → zombie crash | **18+ min alive** ✅ |
+| Profiling phase crash | Yes (workers die) | **No crash** ✅ |
+| PyNaCl/crypto error | Fatal | Resolved (pynacl 1.5.0) ✅ |
+| Model loading | Blocked | **Weights loaded successfully** ✅ |
+
+**Remaining issue**: TP0 weight loading at 864s/shard (14 min) despite tmpfs staging. Likely reading from BTRFS not tmpfs due to Docker volume mount path resolution. Fix: stage model INSIDE container's /dev/shm, not via host volume mount.
+
+**Path forward for vLLM on MI210**:
+1. Build proper vLLM 0.26.0 ROCm container from scratch (clean deps)
+2. Stage models on internal tmpfs (not volume-mounted host /dev/shm)
+3. Persist Triton JIT cache across restarts (`TRITON_CACHE_DIR`)
+4. Test Qwen3-235B-GPTQ-Int4 with torch.compile (expected: 25K+ tok/s)
