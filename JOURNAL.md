@@ -574,3 +574,25 @@ OUTPUT: "
 4. Combined: 350 × 6 × 2 = ~4,200 tok/s (10x over llama.cpp)
 
 **Honest verdict**: vLLM WORKS on MI210 but needs optimization tuning (torch.compile, NCCL fix) to outperform llama.cpp. The infrastructure is proven; the performance tuning is next.
+
+### Dynamic FA-off for Prefill — TESTED, HURTS PERFORMANCE ❌
+
+**Test**: MiMo Q2_K_L with dynamic FA-off during prefill (ubatch.n_tokens > 1 → FA-off)
+
+| Prompt Size | Dynamic FA-off | Baseline (FA-on) | Change |
+|-------------|---------------|-------------------|--------|
+| Short (~34 tok) | 54 tok/s | 181 tok/s | **-70%** ❌ |
+| Long (~119 tok) | 140 tok/s | 181 tok/s | **-23%** ❌ |
+
+**Root cause**: The non-FA attention path dequantizes Q2_K_L V cache to F16 (8x expansion). This dequantization overhead outweighs the FA kernel speed penalty on gfx90a. The FA-on VEC kernel handles quantized KV inline efficiently.
+
+**Conclusion**: Dynamic FA-off is counterproductive for quantized KV cache (Q2_K_L). It only helps for unquantized (F16/BF16) models like DSV2-Lite where V dequant is free. Patch reverted.
+
+### Source Tree Status — Clean ✅
+
+All patches verified present and compiling:
+- V dequant patches (llama-context.cpp): ✅
+- FA graph pool alloc fix (fattn-common.cuh): ✅
+- KIVI2 GPU support (set-rows.cu + 10 files): ✅
+- No dynamic FA-off (correctly reverted): ✅
+- Struct init fixes for type_k_cpu/type_v_cpu: ✅
