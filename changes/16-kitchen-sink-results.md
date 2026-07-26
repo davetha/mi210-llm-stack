@@ -637,3 +637,42 @@ The kernel has data-dependent memory addressing (computing offsets from attentio
 | Full kernel execution | ❌ Numerical cascade → wrong addressing |
 
 The binary patch approach has reached ~95% completion. The kernel loads, launches, executes through initialization and into the main computation loop. The remaining issue is numerical precision, not instruction compatibility.
+
+---
+
+## ZERO-INPUT TEST + KERNEL DESCRIPTOR PATCH (2025-07-26)
+
+### Zero Input Test Result:
+Tested with ALL ZEROS input (Q=0, KV=0). Kernel STILL memory faults.
+This proves the issue is **STRUCTURAL** (address computation), not numerical.
+
+### Kernel Descriptor Analysis:
+Both gfx942 original and gfx90a patched .co have `compute_pgm_rsrc1 = 0x00000000` 
+at offset 0xFC0. This means the HSA runtime computes rsrc1 from .note metadata
+at load time, not from the binary descriptor. Patching rsrc1 directly has no effect
+because the runtime overwrites it.
+
+### Conclusion: Binary Patch Has Reached Its Limit
+
+The binary patch approach has successfully proven:
+1. ✅ Instruction encoding compatibility (D3E1→D3CD eliminates ILLEGAL_INSTRUCTION)
+2. ✅ Register model compatibility (AccVGPR preserved, gfx90a supports it)
+3. ✅ Resource allocation works (vgpr_count=256, kernel launches and dispatches)
+4. ✅ MFMA instruction executes (gets past the MFMA, fault is in subsequent code)
+5. ❌ Full kernel execution fails due to **structural memory addressing** issue
+
+The structural fault is independent of input data values (faults with zeros).
+This indicates the kernel's address computation or workgroup scheduling has
+an architectural dependency that binary patching cannot resolve.
+
+**Likely causes (cannot confirm without MI300X reference):**
+- Workgroup-to-CU mapping difference (gfx942: 304 CUs, gfx90a: 104 CUs)
+- Global memory addressing through different PCIe/memory controller topology
+- Kernel argument (SGPR) layout interpreted differently by gfx90a runtime
+- LDS bank conflict pattern differs between CDNA2 and CDNA3
+
+**What would resolve this:**
+- Access to MI300X hardware for A/B comparison
+- ROCm source-level debugging (rocgdb) to trace the faulting wavefront
+- Writing a native gfx90a kernel using v_mfma_f32_16x16x16f16
+- Using the working Triton MLA decode path (proven on gfx90a)
