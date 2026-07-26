@@ -331,3 +331,41 @@ EF_AMDGPU_MACH_AMDGCN_GFX950 = 0x04f
 ### Files:
 - `configs/patch_co_gfx90a.py` — Script to patch .co files (mach=0x4c → 0x3f)
 - `configs/analyze_co_elf.py` — ELF analysis and instruction frequency tool
+
+---
+
+## UPDATE: Triton MLA Decode WORKS on gfx90a (2025-07-26)
+
+### BREAKTHROUGH: All configurations pass with num_kv_splits=1
+
+The Triton MLA decode kernel (`aiter.ops.triton.attention.mla_decode.decode_attention_fwd`) works perfectly on gfx90a with `num_kv_splits=1`. All earlier crashes were caused by NS>1 buffer issues, NOT architecture incompatibility.
+
+### Results:
+
+| Configuration | Seq Len | Time | Status |
+|--------------|---------|------|--------|
+| 32 heads, d128 | 64 | 0.129ms | ✅ |
+| 32 heads, d128 | 256 | 0.126ms | ✅ |
+| 32 heads, d128 | 1024 | 0.165ms | ✅ |
+| 32 heads, d128 | 4096 | 0.390ms | ✅ |
+| 64 heads, d128 | 256 | 0.135ms | ✅ |
+| 128 heads, d128 | 64 | 0.131ms | ✅ |
+| 128 heads, d128 | 256 | 0.128ms | ✅ |
+| 128 heads, d512 (MLA latent) | 256 | 0.138ms | ✅ |
+| 128 heads, d576 (full MLA) | 64 | 0.127ms | ✅ |
+
+### Key Finding:
+
+- **num_kv_splits=1**: ALL configurations work ✅
+- **num_kv_splits>1**: Memory faults (buffer management issue in the grouped path)
+- The kernel automatically falls back to per-head path on ROCm for large kv_dim
+
+### Performance:
+
+At 0.13ms per decode step for 128-head MLA, this is viable for production use. The Triton kernel JIT-compiles to correct gfx90a machine code automatically — no binary patching needed.
+
+### Next Steps:
+
+1. Fix the num_kv_splits>1 buffer issue for longer sequences
+2. Integrate Triton MLA decode with llama.cpp via Python sidecar
+3. Benchmark end-to-end decode performance vs current llama.cpp
