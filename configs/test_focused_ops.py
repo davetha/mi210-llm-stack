@@ -130,71 +130,74 @@ def test_gemm_a16w16_asm():
 
 
 def test_pa_fwd_asm():
-    """Signature: pa_fwd_asm(Q, K, V, block_tables, context_lens, block_tables_stride0, ...)"""
-    print("\n[Test] pa_fwd_asm (paged attention)")
+    """Signature: pa_fwd_asm(Q, K, V, block_tables, context_lens, block_tables_stride0, ...)
+    CSV only has Gqa=8 (Llama3-70B: 64Q/8KV) and Gqa=16. No MHA entry."""
+    print("\n[Test] pa_fwd_asm (paged attention, GQA=8 Llama3-70B shape)")
     import aiter
 
-    # Decode scenario: 1 query token per request, batch of requests
+    # Llama 3 70B shape: 64 Q heads, 8 KV heads, head_dim=128, GQA ratio=8
     batch = 32
-    num_heads = 32
+    num_q_heads = 64
+    num_kv_heads = 8
     head_dim = 128
     max_ctx = 4096
-    page_size = 128
-    num_pages_per_seq = max_ctx // page_size  # 32
+    page_size = 128  # KV cache page size
+    pages_per_seq = max_ctx // page_size  # 32
 
-    Q = torch.randn(batch, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
-    # KV cache: [num_pages, page_size, num_heads, head_dim] - paged
-    total_pages = batch * num_pages_per_seq
-    K_cache = torch.randn(total_pages, page_size, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
-    V_cache = torch.randn(total_pages, page_size, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
-    block_tables = torch.arange(batch * num_pages_per_seq, dtype=torch.int32, device="cuda").reshape(batch, num_pages_per_seq)
+    Q = torch.randn(batch, num_q_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    total_pages = batch * pages_per_seq
+    K_cache = torch.randn(total_pages, page_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    V_cache = torch.randn(total_pages, page_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    block_tables = torch.arange(batch * pages_per_seq, dtype=torch.int32, device="cuda").reshape(batch, pages_per_seq)
     context_lens = torch.full((batch,), max_ctx, dtype=torch.int32, device="cuda")
 
-    print(f"  shapes: Q={Q.shape}, K_cache={K_cache.shape}, block_tables={block_tables.shape}")
-    r = safe_call(lambda: aiter.pa_fwd_asm(Q, K_cache, V_cache, block_tables, context_lens, block_tables.stride(0)))
-    print(f"  result: {r['status']} ({r.get('ms')}ms)")
+    print(f"  Q={Q.shape}, K_cache={K_cache.shape}, gqa={num_q_heads//num_kv_heads}")
+    # hp=None means use whatever default; try hp=0 first (matches CSV)
+    r = safe_call(lambda: aiter.pa_fwd_asm(Q, K_cache, V_cache, block_tables, context_lens,
+                                            block_tables.stride(0), high_precision=0))
+    print(f"  hp=0: {r['status']} ({r.get('ms')}ms)")
     if r["status"] == "PASS":
         out = r.get("result")
-        if out is not None:
-            print(f"  out shape: {out.shape if hasattr(out, 'shape') else type(out)}")
-            if hasattr(out, 'shape'):
-                print(f"  out[0,0,:4]: {out[0, 0, :4].tolist()}")
+        if hasattr(out, "shape"):
+            print(f"  out shape: {out.shape}")
+            print(f"  out[0,0,:4]: {out[0, 0, :4].tolist()}")
     else:
         print(f"  err: {r.get('error', '')[:400]}")
     return r
 
 
 def test_pa_ps_fwd_asm():
-    """Signature: pa_ps_fwd_asm(Q, K, V, kv_indptr, kv_page_indices, context_lens, softmax_scale, ...)"""
-    print("\n[Test] pa_ps_fwd_asm (persistent split paged attention)")
+    """pa_ps_fwd_asm uses CSR-style page indices. Same GQA constraints."""
+    print("\n[Test] pa_ps_fwd_asm (persistent split, GQA=8)")
     import aiter
 
-    # PS variant uses page indptr format (CSR-like)
     batch = 32
-    num_heads = 32
+    num_q_heads = 64
+    num_kv_heads = 8
     head_dim = 128
     max_ctx = 4096
     page_size = 128
     pages_per_seq = max_ctx // page_size
 
-    Q = torch.randn(batch, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    Q = torch.randn(batch, num_q_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
     total_pages = batch * pages_per_seq
-    K_cache = torch.randn(total_pages, page_size, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
-    V_cache = torch.randn(total_pages, page_size, num_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    K_cache = torch.randn(total_pages, page_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
+    V_cache = torch.randn(total_pages, page_size, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda") * 0.1
 
     kv_indptr = torch.tensor([i * pages_per_seq for i in range(batch + 1)], dtype=torch.int32, device="cuda")
     kv_page_indices = torch.arange(batch * pages_per_seq, dtype=torch.int32, device="cuda")
     context_lens = torch.full((batch,), max_ctx, dtype=torch.int32, device="cuda")
     softmax_scale = 1.0 / (head_dim ** 0.5)
 
-    print(f"  shapes: Q={Q.shape}, K_cache={K_cache.shape}")
+    print(f"  Q={Q.shape}, K_cache={K_cache.shape}")
     r = safe_call(lambda: aiter.pa_ps_fwd_asm(
-        Q, K_cache, V_cache, kv_indptr, kv_page_indices, context_lens, softmax_scale
+        Q, K_cache, V_cache, kv_indptr, kv_page_indices, context_lens, softmax_scale,
+        high_precision=0
     ))
-    print(f"  result: {r['status']} ({r.get('ms')}ms)")
+    print(f"  hp=0: {r['status']} ({r.get('ms')}ms)")
     if r["status"] == "PASS":
         out = r.get("result")
-        if out is not None and hasattr(out, "shape"):
+        if hasattr(out, "shape"):
             print(f"  out shape: {out.shape}")
             print(f"  out[0,0,:4]: {out[0, 0, :4].tolist()}")
     else:
