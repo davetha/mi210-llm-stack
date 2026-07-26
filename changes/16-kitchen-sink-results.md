@@ -544,3 +544,38 @@ This is a full binary translation of the AccVGPR→VGPR register convention, not
 | + register type bits | ❌ | ✅ Yes | VGPR count too low (205 < 254 needed) |
 | + VGPR count | ❌ | ✅ Yes | Data in AccVGPR, MFMA reads VGPR |
 | + accvgpr_write/read | ❌ | ??? | Would need full register translation |
+
+---
+
+## LAYER 5 COMPLETE: Full Binary Translation Status (2025-07-26)
+
+### ALL 7 Patch Layers Applied:
+
+| Layer | What | Count | Status |
+|-------|------|-------|--------|
+| 1. e_flags | mach 0x4c→0x3f | 1 | ✅ Code object loads |
+| 2. MFMA opcode | D3E1→D3CD | 816 | ✅ ILLEGAL_INSTRUCTION eliminated |
+| 3. MFMA src type | Clear bits 27,28 | 816 | ✅ AccVGPR→VGPR for sources |
+| 4. MFMA dst type | Clear bit 15 | 816 | ✅ AccVGPR→VGPR for destination |
+| 5. ds_read_b128 | DBFE→D9FE | 350 | ✅ LDS loads to VGPR |
+| 6. accvgpr_write/read | D3D840/D3D940→D14100 | 680 | ✅ All VGPR register copies |
+| 7. vgpr_count | 512→256 (uint16) | 1 | ✅ Kernel LAUNCHES! |
+
+### Critical Discovery: vgpr_count was 512 (msgpack uint16)
+
+The original vgpr_count was 512 (encoded as msgpack uint16: 0xCD 0x02 0x00), not 205. Earlier analysis misread the format byte 0xCD as the value. The correct value 512 reflects gfx942's larger register file (512 VGPR-equivalent vs gfx90a's 256).
+
+After correctly patching to 256 (using uint16 encoding), the kernel **launches successfully** — no more "invalid resource handle"!
+
+### Current Status: Kernel launches, memory faults during execution
+
+The kernel dispatches and starts executing on gfx90a. Memory fault occurs during execution, likely from:
+- Data interpretation: BF16 bits fed to F16 MFMA produce different intermediate values
+- These different values cause different memory addressing → out-of-bounds access
+- The pre-conversion trick (F16 bits in BF16 tensor) helps but kernel data flow still has non-MFMA operations that assume BF16 format
+
+### Files:
+- `configs/complete_patch_v2.py` — All 6 code layers (no VGPR count)
+- `configs/correct_vgpr_patch.py` — Correct uint16 VGPR count patcher
+- `configs/opcode_swap.py` — Original opcode-only patcher
+- `configs/full_binary_patch.py` — Earlier 4-layer patcher
