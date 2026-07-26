@@ -285,3 +285,49 @@ Triton kernels are Python source code that JIT-compiles to the native architectu
 - Deploy Q2_K_L (54.6 tok/s decode, 3.64× current) — ready now
 - Use CK flash attention for prefill (2M tok/s per layer)
 - Triton MLA decode for single-token decode path (once debugged)
+
+---
+
+## UPDATE: Binary Code Object Patching Experiment (2025-07-26)
+
+### Can gfx942 .co Files Run on gfx90a?
+
+**Attempted**: Binary-patched 22 gfx942 MLA .co files by changing ELF e_flags from mach=0x4c (gfx942) to mach=0x3f (gfx90a).
+
+### Results:
+
+| Step | Status | Detail |
+|------|--------|--------|
+| ELF header patching | ✅ SUCCESS | e_flags mach field changed 0x4c → 0x3f |
+| Config CSV setup | ✅ SUCCESS | Copied to gfx90a/mla/ directory |
+| JIT module rebuild | ✅ SUCCESS | module_mla_asm compiled in 10.2s |
+| Heuristic kernel lookup | ✅ SUCCESS | Found `mla_pfl_bf16_a16w16_causal_subQ128_mqa128` |
+| HSA code object loading | ✅ SUCCESS | Loaded from gfx90a/mla/mla_pfl_*.co |
+| Kernel dispatch | ✅ SUCCESS | hipModuleLaunchKernel called |
+| **Kernel execution** | ❌ **ILLEGAL INSTRUCTION** | `HSA_STATUS_ERROR_ILLEGAL_INSTRUCTION` |
+
+### Root Cause:
+
+The MLA ASM kernel uses `v_mfma_f32_16x16x16_bf16` — an instruction that EXISTS on both gfx90a and gfx942. However, the **binary encoding is different** between the two architectures:
+
+- gfx942 encoding: `D3E10020 1A020190` (opcode D3E1 = MFMA on gfx942)
+- gfx90a encoding: Different opcode bytes for the same instruction
+
+The HSA runtime loaded the patched code object because the ELF header was valid. The GPU started executing but trapped on the first instruction because the opcode bytes are undefined on gfx90a.
+
+### Conclusion:
+
+**Binary code objects cannot be ported between GCN ISA versions**, even when the instruction mnemonics are identical. The binary encoding changes between architectures. This is not a case of "turning off bits" — every instruction would need to be translated.
+
+### ELF e_flags Reference:
+
+From `/opt/python/lib/python3.14/site-packages/_rocm_sdk_devel/include/hsa/amd_hsa_elf.h`:
+```
+EF_AMDGPU_MACH_AMDGCN_GFX90A = 0x03f
+EF_AMDGPU_MACH_AMDGCN_GFX942 = 0x04c
+EF_AMDGPU_MACH_AMDGCN_GFX950 = 0x04f
+```
+
+### Files:
+- `configs/patch_co_gfx90a.py` — Script to patch .co files (mach=0x4c → 0x3f)
+- `configs/analyze_co_elf.py` — ELF analysis and instruction frequency tool
