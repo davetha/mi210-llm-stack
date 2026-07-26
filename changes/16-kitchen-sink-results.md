@@ -499,3 +499,48 @@ The files for this work:
 - `configs/patch_co_gfx90a.py` — Full .co patcher (e_flags + opcode)
 - `configs/mfma_emulation_proof.cu` — Proof that F16 MFMA compiles on gfx90a
 - `configs/bf16_f16_benchmark.cu` — Conversion benchmark
+
+---
+
+## FULL BINARY PATCH ATTEMPT: All Layers Patched (2025-07-26)
+
+### Three-Layer Patch Applied:
+
+1. **Opcode**: D3E1 → D3CD in word0 upper 16 bits (816 instances)
+2. **Source register type**: Cleared bits 27,28 in word1 (AccVGPR → VGPR for src0,src1)
+3. **Destination register type**: Cleared bit 15 in word0 (AccVGPR → VGPR for VDST)
+4. **VGPR count**: Patched kernel descriptor from 205 → 255
+5. **e_flags**: mach 0x4c → 0x3f
+
+### Result: All 816 MFMA instructions show VGPR operands ✅ but still Memory Fault ❌
+
+### Root Cause: Register File Architecture
+
+The kernel uses `v_accvgpr_write` and `v_accvgpr_read` instructions to move data between VGPR and AccVGPR register files:
+
+```
+v_accvgpr_write a[144], v[data]     ← Data goes INTO AccVGPR space
+v_mfma ... v[144] ...               ← MFMA reads from VGPR space (PATCHED)
+                                     ↑ DIFFERENT register file! Data not here!
+```
+
+On gfx942, AccVGPR and VGPR are separate address spaces. Data written to `a[144]` is NOT the same as data in `v[144]`. After patching MFMA to use VGPR addresses, it reads from uninitialized VGPRs while the actual data sits in AccVGPRs.
+
+### What Would Complete the Patch:
+
+1. Find all `v_accvgpr_write` instructions → replace with `v_mov_b32` (VGPR→VGPR copy)
+2. Find all `v_accvgpr_read` instructions → replace with `v_mov_b32` (VGPR→VGPR copy)
+3. Ensure no register number conflicts between original VGPR and former AccVGPR ranges
+4. Handle the MFMA `cbsz`/`abid` crossbar parameters (they control AccVGPR→physical mapping)
+
+This is a full binary translation of the AccVGPR→VGPR register convention, not just opcode patching.
+
+### Summary of Patch Progression:
+
+| Patch Step | ILLEGAL_INSTRUCTION | Memory Fault | Root Cause |
+|-----------|---------------------|-------------|------------|
+| e_flags only | ✅ Yes | N/A | Instruction D3E1 doesn't exist on gfx90a |
+| + opcode swap | ❌ Eliminated! | ✅ Yes | AccVGPR operands invalid for F16 MFMA |
+| + register type bits | ❌ | ✅ Yes | VGPR count too low (205 < 254 needed) |
+| + VGPR count | ❌ | ✅ Yes | Data in AccVGPR, MFMA reads VGPR |
+| + accvgpr_write/read | ❌ | ??? | Would need full register translation |
