@@ -408,3 +408,26 @@ Kimi roofline analysis revealed: IQ2_XXS at 41 tok/s uses only **8% of HBM bandw
 **Upgrade attempt**: Built vLLM 0.26.0+rocm714 from source in existing container. Build succeeded but PyNaCl/NCCL dependency chain is incompatible — `crypto_stream_salsa20_NONCEBYTES` constant missing from PyNaCl's C extension in all tested versions (1.4.0, 1.6.2). Worker processes fail NCCL communicator initialization.
 
 **Path forward**: Build a clean vLLM 0.26.0 ROCm container from scratch (not upgrading in-place). Or wait for official `rocm/vllm:rocm*_vllm0.26.0` Docker image.
+
+### REAL FIX: FlashAttention + HIP Graph Capture Working Together ✅
+
+**Root cause found**: `launch_fattn()` in `fattn-common.cuh` uses raw `cudaMalloc`/`cudaFree` for K_f16/V_f16 temp buffers on HIP (lines 1478-1499). These calls are **not permitted during HIP stream capture**, causing "operation not permitted when stream is capturing" error.
+
+The code explicitly chose raw malloc over the pool allocator to avoid memory retention (per issue #22107). But this makes FA fundamentally incompatible with graph capture.
+
+**The fix** (1 file, ~10 lines changed):
+- `fattn-common.cuh`: Replaced `hip_f16_alloc` (raw cudaMalloc/cudaFree) with `ggml_cuda_pool_alloc<half>` (graph-safe pool allocator)
+- The pool allocator is graph-safe because: during warmup (eager execution before capture), the pool allocates the buffer via cudaMalloc. During graph capture, the pool already has the buffer cached — no cudaMalloc needed.
+- Memory retention concern is acceptable: the f16 buffer is ~0.5-2GB, small relative to 103GB model weights.
+
+**Also reverted**: the FLASH_ATTN_EXT graph compatibility check that disabled graphs for FA — no longer needed since FA is now graph-safe.
+
+**Verified results** (MiMo Q2_K_L, all-VRAM, 2x MI210):
+- Graphs captured and reused: ✅ (137 reused on sustained decode)
+- No crash: ✅
+- Decode: 56.2 tok/s sustained (vs 54.6 without graphs = **1.03x speedup**)
+- Short sequences show up to 1.16x (63.3 tok/s) where launch overhead is proportionally larger
+- Correctness: ✅ (output verified)
+- No `GGML_CUDA_DISABLE_GRAPHS=1` env var needed: ✅
+
+The modest 3% speedup is because MI210's kernel launch overhead is only ~1.6ms/token (1500-2000 launches × ~3-6µs each). The theoretical 20-40% applies to architectures with higher launch overhead or more frequent small kernels.
