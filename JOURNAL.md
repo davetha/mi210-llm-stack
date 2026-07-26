@@ -431,3 +431,30 @@ The code explicitly chose raw malloc over the pool allocator to avoid memory ret
 - No `GGML_CUDA_DISABLE_GRAPHS=1` env var needed: ✅
 
 The modest 3% speedup is because MI210's kernel launch overhead is only ~1.6ms/token (1500-2000 launches × ~3-6µs each). The theoretical 20-40% applies to architectures with higher launch overhead or more frequent small kernels.
+
+### Prefill Optimization Research (3 tracks)
+
+**P1: CK FlashAttention integration — BLOCKED (build lost)**
+- fa-build container was removed during cleanup, FlashAttention 2.8.3 CK build lost
+- Would need 2+ hours to rebuild from scratch
+- Explore agent confirmed dispatch path: `ggml_cuda_flash_attn_ext()` in fattn.cu dispatches to TILE/VEC/MMA/WMMA kernels based on GPU capability
+- Integration point: add new dispatch case for CK FA in `ggml_cuda_flash_attn_ext()`
+- Expected: 2.6x prefill speedup if CK FA kernel is used instead of slow fallback
+
+**P2: Dynamic FA-off for prefill — RESEARCHED (feasible, 2-3 days)**
+- `cparams.flash_attn` is set once per context (llama-context.cpp:199)
+- Graph builder uses same FA setting for both prefill and decode
+- **Fix**: modify `graph_params()` to override FA mode based on `ubatch.n_tokens > 1`
+- **Risk**: FA-off dequantizes V to F16 (8x expansion for Q2_K), OOMs at >4K context
+- **Mitigation**: context-length-based switching (FA-off for <4K, FA-on for >4K)
+- VRAM: FA-off at 32K context = +64GB temporary buffer (OOM on 64GB cards)
+
+**P3: vLLM 0.26.0 clean build — IN PROGRESS**
+- Installed vLLM 0.26.0 from pip + copied ROCm .so from v0.25.2.dev source (ABI-compatible)
+- PyNaCl 1.5.0 installed (fixes salsa20 constant)
+- Weights loading from BTRFS at 14 min/shard (57 min total for DSV2-Lite 4 shards)
+- Profiling phase not yet reached
+- **New bottleneck**: BTRFS filesystem read speed (14 min/shard vs 35s on TP1)
+- Fix: stage model on /dev/shm (tmpfs) before loading
+
+**Root cause of BTRFS slowness**: BTRFS compression makes random reads 24x slower than sequential. Safetensors loading does many small reads across shards. TP0 reads from cold cache while TP1 reads from warm cache (already in page cache from model discovery).
