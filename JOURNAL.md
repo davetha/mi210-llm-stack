@@ -596,3 +596,28 @@ All patches verified present and compiling:
 - KIVI2 GPU support (set-rows.cu + 10 files): ✅
 - No dynamic FA-off (correctly reverted): ✅
 - Struct init fixes for type_k_cpu/type_v_cpu: ✅
+
+### CK FlashAttention Integration — Code Written, Build Blocked by Environment
+
+**What was accomplished:**
+1. Recreated fa-build container with PyTorch 2.11+rocm7.14
+2. Verified flash_attn 2.8.3 works on MI210: **2,056,669 tok/s** per attention layer (native ROCm/CK backend, links libamdhip64.so)
+3. flash_attn uses AMD Composable Kernel (CK) backend — confirmed via `fmha_fwd_splitkv` symbols using `ck_tile` namespace
+4. Wrote `fa_wrapper.cpp` — C bridge that converts raw GPU pointers to PyTorch tensors and calls `FLASH_NAMESPACE::mha_fwd()`
+5. Identified exact integration point in llama.cpp: `ggml_cuda_flash_attn_ext()` in `fattn.cu` → add new dispatch case for CK FA
+
+**What blocked completion:**
+- fa_wrapper.cpp compilation fails because the vLLM container is a **runtime environment**, not a development environment
+- PyTorch's ATen headers require CUDA development headers (`cuda_runtime_api.h`, `cusparse.h`, `cublas_v2.h`, `cuda_cmake_macros.h`) that don't exist in the runtime container
+- Created 80+ stub headers but still hit fundamental type mismatches (`cudaError_t`, `cudaStream_t` not defined without hipcc's compatibility layer)
+- Using hipcc instead of g++ fails because it treats host code as device code (`-x hip`)
+
+**Path to completion:**
+1. Build in a proper ROCm development container (e.g., `rocm/dev-ubuntu-24.04:7.0` with full HIP SDK)
+2. Or build PyTorch from source in the container (generates all missing headers)
+3. Or use CMake with `find_package(Torch)` which handles include paths automatically
+4. Expected speedup: 2.6× prefill (from slow MMA fallback to fast CK kernel)
+
+**Files delivered:**
+- `configs/fa_wrapper.cpp` — The bridge code (ready to compile in proper dev env)
+- `configs/build_fa_wrapper4.py` — Build script with comprehensive CUDA stub generation
