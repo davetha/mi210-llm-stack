@@ -138,7 +138,19 @@ def stream_request(url, model, prompt, max_tokens, timeout, extra=None):
             if chunk.get("usage"):
                 usage = chunk["usage"]
             for choice in chunk.get("choices", []):
-                piece = (choice.get("delta") or {}).get("content") or ""
+                delta = choice.get("delta") or {}
+                # Reasoning models split their output across two fields, and
+                # which one is used depends on the ENGINE, not the model.
+                # llama.cpp (with --jinja) emits the <think> block as
+                # `reasoning_content` and only the post-reasoning answer as
+                # `content`; vLLM leaves it all in `content` unless a reasoning
+                # parser is configured. Reading only `content` therefore sees
+                # NOTHING at all from llama.cpp on a short generation that has
+                # not escaped the think block yet -- the stream looks empty
+                # even though the server reports it generated tokens fine.
+                # TTFT means time to the first token the model produced, on
+                # whichever channel it produced it.
+                piece = delta.get("content") or delta.get("reasoning_content") or ""
                 if not piece:
                     continue
                 if ttft is None:
