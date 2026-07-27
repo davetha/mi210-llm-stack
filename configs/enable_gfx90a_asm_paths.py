@@ -50,6 +50,9 @@ import sys
 SITE = "/opt/python/lib/python3.14/site-packages"
 MHA_PY = f"{SITE}/aiter/ops/mha.py"
 MHA_CU = f"{SITE}/aiter_meta/csrc/cpp_itfs/mha_fwd.cu"
+A4W4_PY = f"{SITE}/aiter/ops/gemm_op_a4w4.py"
+QUANT_PY = f"{SITE}/aiter/ops/quant.py"
+CORE_PY = f"{SITE}/aiter/jit/core.py"
 
 MARK = "gfx90a-asm-enable"
 
@@ -139,6 +142,37 @@ PATCHES = [
         '    // {MARK}: gfx90a runs the gfx942 kernels, so it needs their grid too.\n'
         '    if((arch_id == "gfx942" || arch_id == "gfx90a") &&\n'
         '       a.hdim_q == 192 && a.hdim_v == 128)\n',
+        1,
+    ),
+
+    # ---------------------------------------------------------------------
+    # Escape hatches: the INVERSE bug. These guards name only gfx942, so
+    # gfx90a *passes* them and walks into FP4 code paths CDNA2 has no hardware
+    # for. They are silent -- no warning, no exception at the gate -- so the
+    # failure surfaces far from its cause. Widening them is not an
+    # optimisation, it is the fallback policy working correctly: gfx90a should
+    # be routed away from FP4 exactly as gfx942 is.
+    # ---------------------------------------------------------------------
+    (
+        A4W4_PY,
+        '    if gfx_arch in ["gfx942"]:\n',
+        '    # {MARK}: CDNA2 has no FP4 hardware either -- refuse, do not proceed.\n'
+        '    if gfx_arch in ["gfx942", "gfx90a"]:\n',
+        1,
+    ),
+    (
+        QUANT_PY,
+        '        and get_gfx() != "gfx942"\n',
+        '        # {MARK}: gfx90a has no FP4 ALU; keep it out of the f4 quant path.\n'
+        '        and get_gfx() not in ("gfx942", "gfx90a")\n',
+        1,
+    ),
+    (
+        CORE_PY,
+        '        if get_gfx() != "gfx942" and int(os.getenv("AITER_FP4x2", "1")) > 0:\n',
+        '        # {MARK}: do not advertise FP4x2 to the compiler on gfx90a.\n'
+        '        if (get_gfx() not in ("gfx942", "gfx90a")\n'
+        '                and int(os.getenv("AITER_FP4x2", "1")) > 0):\n',
         1,
     ),
 ]
