@@ -1,0 +1,80 @@
+{
+  "label": "t35-awq-tp1-128k",
+  "tier": "35B",
+  "quant": "awq",
+  "engine": "vllm",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15147,
+  "ttft_s_median": 5.723356282978784,
+  "ttft_s_min": 5.692411047988571,
+  "ttft_s_max": 5.753313144959975,
+  "implied_prefill_tps_median": 2660.7354725994146,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " my output is exactly that word\u2014no typos, no additions. That's the only way to satisfy the query.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": null,
+  "vram_after": null,
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 5.753313144959975,
+      "total_s": 6.0098814489902,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15147,
+        "total_tokens": 15155,
+        "completion_tokens": 8
+      },
+      "rep": 0,
+      "marker": "3fa3a4d44a9b410f8e527b99dfe312f4",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785194504.7236762,
+      "actual_prompt_tokens": 15147,
+      "implied_prefill_tps": 2632.7438848464376,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 5.692411047988571,
+      "total_s": 5.949586942035239,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15146,
+        "total_tokens": 15154,
+        "completion_tokens": 8
+      },
+      "rep": 1,
+      "marker": "868ff12b34d14581b8d5540c97635e82",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785194510.7356052,
+      "actual_prompt_tokens": 15146,
+      "implied_prefill_tps": 2660.7354725994146,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 5.723356282978784,
+      "total_s": 5.980194116011262,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15246,
+        "total_tokens": 15254,
+        "completion_tokens": 8
+      },
+      "rep": 2,
+      "marker": "ffc7ea9e8aa84cd6a1269084d2b37327",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785194516.687136,
+      "actual_prompt_tokens": 15246,
+      "implied_prefill_tps": 2663.82158408371,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}
