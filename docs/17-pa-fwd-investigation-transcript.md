@@ -243,7 +243,7 @@ python -m atom.examples.simple_inference \
 | `changes/26-pa-fwd-naive-native-ck-decode.md` | Phase 7: CK JIT breakthrough |
 | `changes/27-definitive-pa-fwd-investigation.md` | Phase 8: complete test matrix + root cause |
 | `configs/patch_option2_reshape_and_cache.py` | Force reshape_and_cache on gfx90a |
-| `configs/patch_correct_bf16.py` | D3E1→D3E7 patch (correct BF16 MFMA for gfx90a) |
+| ~~`configs/patch_correct_bf16.py`~~ | **Does not exist.** The correct D3E1→D3E7 patcher is [`configs/repatch_gfx942_to_gfx90a.py`](../configs/repatch_gfx942_to_gfx90a.py), which verifies each substitution with the assembler rather than assuming it. |
 | `tests/test_atom_model_ops.py` | Comprehensive ATOM operator test suite |
 | `tests/test_pa_naive_correctness.py` | pa_fwd_naive vs PyTorch reference |
 | `docs/16-complete-technical-reference.md` | Full 9-section technical reference |

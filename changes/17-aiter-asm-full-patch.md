@@ -1,5 +1,15 @@
 # AITER ASM Full Patch: All Categories on gfx90a
 
+> ⚠️ **SUPERSEDED** — corrected: the patch method, and the fmha_v3_fwd status line.
+>
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-26
 **Status**: Patching complete (1,179 .co files), testing in progress
 
@@ -82,6 +92,6 @@ Need to call sorting stage first, then fmoe_g1u1.
 
 ## Files
 
-- `configs/patch_category.py` — Generalized recursive category patcher
+- `configs/attic/patch_category.py` ⚠️ — Generalized recursive category patcher
 - `configs/test_all_aiter_ops.py` — API discovery + smoke tests
 - `configs/test_focused_ops.py` — Per-category validation with correct sigs

@@ -1,5 +1,15 @@
 # pa_fwd_asm: First Decode Step WORKS Through ATOM
 
+> ⚠️ **SUPERSEDED** — corrected: the patch method.
+>
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-26
 **Status**: ✅ First call succeeds, second call faults
 

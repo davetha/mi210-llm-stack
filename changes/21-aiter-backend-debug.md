@@ -1,5 +1,15 @@
 # AiterBackend Debug Status
 
+> ⚠️ **SUPERSEDED** — corrected: the claim that the opcode swap and vgpr_count are correct for all categories.
+>
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 ## What's Proven Working
 
 1. **pa_fwd_asm kernel executes correctly on gfx90a** — standalone test with

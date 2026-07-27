@@ -2,6 +2,13 @@
 
 > Full narrative of the multi-hour ultrasearch to optimize 230B MoE inference on 2× AMD MI210.
 > What worked, what failed, and why. For others facing the same hardware.
+>
+> ⚠️ **This is a chronological journal — earlier entries record conclusions that were
+> later overturned, and are left as written.** In particular, entries around the ASM
+> binary patch describe a `D3E1 → D3CD` substitution and a `vgpr_count` rewrite that
+> are both **wrong**, and attribute performance to ASM kernels that were in fact the
+> CK/Triton fallback. For current status see
+> [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md).
 
 ## Hardware
 
@@ -753,7 +760,7 @@ This discovery changes the integration approach:
 - Prefill S=512: **3,013,378 tok/s** (3M tok/s)
 - Decode: **0.090ms/step** (11,088 steps/sec) — 3× faster than Triton
 
-**Files**: `docs/14-mla-asm-binary-patch.md`, `configs/patch_all_mla.py`, `configs/test_prefill_mla_gfx90a.py`
+**Files**: `docs/14-mla-asm-binary-patch.md`, `configs/attic/patch_all_mla.py` ⚠️, `configs/test_prefill_mla_gfx90a.py`
 
 ## ATOM Framework Integration Complete (2026-07-26)
 
@@ -860,8 +867,8 @@ failed due to different tensor shapes between V2 Lite and V3 formats.
 
 ### Files Created This Session
 
-- `configs/patch_category.py` — Generalized recursive category patcher
-- `configs/patch_root_cos.py` — Root-level .co file patcher
+- `configs/attic/patch_category.py` ⚠️ — Generalized recursive category patcher
+- `configs/attic/patch_root_cos.py` ⚠️ — Root-level .co file patcher
 - `configs/test_all_aiter_ops.py` — API discovery + smoke tests
 - `configs/test_focused_ops.py` — Per-category validation
 - `configs/test_fmoe_pipeline.py` — MoE pipeline test

@@ -1,5 +1,19 @@
 # MLA ASM Binary Patch: gfx942 → gfx90a
 
+> ⚠️ **SUPERSEDED** — corrected: the patch method and the 3M tok/s / 0.090ms attribution.
+>
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+> Performance figures attributed to ASM kernels here were **mis-attributed**.
+> `mha.py` and `mla.py` gate their ASM paths on gfx942/gfx950, so on gfx90a
+> these measured the CK or Triton fallback. The throughput is real; the
+> attribution is not.
+>
+> Current status: [`./19-aiter-operator-port-matrix.md`](./19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-26
 **Status**: ✅ WORKING — Both prefill (3M tok/s) and decode (0.090ms/step) validated
 **Approach**: Binary patch of AMD gfx942 MLA ASM code objects to run on gfx90a
@@ -105,7 +119,7 @@ KV = torch.randn(num_pages, page_size, 1, QK_HEAD_DIM, dtype=torch.bfloat16, dev
 
 | File | Purpose |
 |------|---------|
-| `configs/patch_all_mla.py` | Patches ALL 22 MLA `.co` files (e_flags + opcode + vgpr_count) |
+| `configs/attic/patch_all_mla.py` ⚠️ | Patches ALL 22 MLA `.co` files (e_flags + opcode + vgpr_count) |
 | `configs/test_prefill_mla_gfx90a.py` | Prefill test with correct MLA shapes |
 | `configs/test_decode_gfx90a.py` | Decode test |
 | `configs/test_decode_pipeline.py` | Full decode pipeline test |
