@@ -145,14 +145,18 @@ table contains 28 gfx90a rows.
 
 ### Validation
 
-`tests/test_fmha_v3_fwd_asm_gfx90a.py` — 48 configurations across head dim
-(128, 192×128), causal/non-causal, GQA ratio (1, 8, 8), sequence length
-(129…1024) and batch (1, 2, 4):
+`tests/test_fmha_v3_fwd_asm_gfx90a.py` — **80 configurations, 0 failures**,
+rel_rms 1.1e-4 … 7.6e-4, 100.00% element match at atol/rtol 2e-2:
 
-```
-48 configs run, 0 failures
-rel_rms 1.1e-4 .. 7.6e-4, 100.00% element match at atol/rtol 2e-2
-```
+- 48 batched (`flash_attn_func`): head dim 128 and 192×128, causal/non-causal,
+  GQA ratio 1/8/8, seqlen 129…1024, batch 1/2/4.
+- 32 varlen (`flash_attn_varlen_func`): the packed-THD path a serving stack
+  actually takes for prefill. It selects the `*_group` kernels rather than the
+  batched ones, so a batched pass says nothing about it — it needs its own
+  coverage. Ragged batches up to 4 sequences of differing length.
+
+Seven distinct ASM kernels are exercised: `{hd128, hd192x128}` ×
+`{plain, causal}` × `{batched, _group}`.
 
 Proof the ASM path actually ran, rather than a silent fall back to CK:
 

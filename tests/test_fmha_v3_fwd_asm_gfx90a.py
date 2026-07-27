@@ -146,6 +146,72 @@ def main():
                           f"{rms:>10.6f} {pc:>7.2f}% {us:>8.1f}  "
                           f"{'PASS' if ok else 'FAIL'}")
 
+    # Varlen (packed THD) is the path a serving stack actually takes for
+    # prefill, and it selects the *_group kernels rather than the batched ones,
+    # so it needs its own coverage -- a batched pass says nothing about it.
+    print(f"\n--- varlen (flash_attn_varlen_func, *_group kernels) ---")
+    print(f"{'dtype':>5} {'hdq':>4} {'causal':>7} {'seqs':>5} {'lens':>18} "
+          f"{'hq':>4} {'hkv':>4} {'rel_rms':>10} {'%close':>8} {'us':>9}  verdict")
+    for hdq in (128, 192):
+        for causal in (False, True):
+            for hq, hkv in ((8, 8), (32, 4)):
+                for lens in ([256], [128, 384], [64, 200, 500], [129, 129, 129, 129]):
+                    torch.manual_seed(0)
+                    hdv, scale = 128, 1.0 / (hdq ** 0.5)
+                    total = sum(lens)
+                    cu = torch.tensor([0] + list(torch.tensor(lens).cumsum(0)),
+                                      dtype=torch.int32)
+                    q = torch.empty(total, hq, hdq, dtype=dtypes.bf16).uniform_(-1, 1)
+                    k = torch.empty(total, hkv, hdq, dtype=dtypes.bf16).uniform_(-1, 1)
+                    v = torch.empty(total, hkv, hdv, dtype=dtypes.bf16).uniform_(-1, 1)
+
+                    # Reference: attend within each sequence independently.
+                    ref = torch.empty(total, hq, hdv, dtype=dtypes.bf16)
+                    off = 0
+                    for n in lens:
+                        ref[off:off + n] = reference(
+                            q[off:off + n].unsqueeze(0), k[off:off + n].unsqueeze(0),
+                            v[off:off + n].unsqueeze(0), causal, scale).squeeze(0)
+                        off += n
+
+                    try:
+                        got, log = capture_fds(
+                            lambda: aiter.flash_attn_varlen_func(
+                                q, k, v, cu, cu, max(lens), max(lens),
+                                softmax_scale=scale, causal=causal))
+                        if "fmha_v3_fwd" in log:
+                            asm_loads.append(
+                                next(l.strip() for l in log.splitlines()
+                                     if "fmha_v3_fwd" in l))
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"{'bf16':>5} {hdq:>4} {str(causal):>7} {len(lens):>5} "
+                              f"{str(lens):>18} {hq:>4} {hkv:>4} {'-':>10} {'-':>8} "
+                              f"{'-':>9}  ERROR {exc}")
+                        fails += 1
+                        continue
+                    if isinstance(got, tuple):
+                        got = got[0]
+                    torch.cuda.synchronize()
+                    t0 = time.perf_counter()
+                    for _ in range(10):
+                        aiter.flash_attn_varlen_func(q, k, v, cu, cu, max(lens),
+                                                     max(lens), softmax_scale=scale,
+                                                     causal=causal)
+                    torch.cuda.synchronize()
+                    us = (time.perf_counter() - t0) / 10 * 1e6
+
+                    r, g = ref.float(), got.float()
+                    rms = (((r - g) ** 2).mean().sqrt()
+                           / r.abs().max().clamp(min=1e-6)).item()
+                    pc = torch.isclose(r, g, atol=2e-2,
+                                       rtol=2e-2).float().mean().item() * 100
+                    ok = rms < 0.02 and pc > 99.0
+                    fails += (not ok)
+                    ran += 1
+                    print(f"{'bf16':>5} {hdq:>4} {str(causal):>7} {len(lens):>5} "
+                          f"{str(lens):>18} {hq:>4} {hkv:>4} {rms:>10.6f} "
+                          f"{pc:>7.2f}% {us:>8.1f}  {'PASS' if ok else 'FAIL'}")
+
     print(f"\n{ran} configs run, {fails} failures")
 
     if asm_loads:
