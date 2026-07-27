@@ -219,9 +219,21 @@ python3 bench_rocwmma_fattn.py http://127.0.0.1:8093 baseline
 
 Instruction-level check: `configs/scan_fatbin_mfma.py <libggml-hip.so> flash_attn_ext_f16`.
 
-The two arms were run on GPU 1 while `llama-coder-80b` continued serving on
-GPU 0, so the production chat stack was never stopped for this work.
+Each arm needs an otherwise-idle card: on a two-card host, pin the two builds to
+different GPUs rather than running them back to back on one, and do not
+benchmark while another model is resident on the same card.
 
-Image built for this investigation (slower — **do not deploy**):
-`llama-rocm714-wmma:latest`. It carries rocWMMA 2.2.1 headers in
-`/usr/include/rocwmma` and builds into `/src/build-wmma`.
+The production chat stack **was** interrupted during this work, twice — once
+unintentionally (a second container was started on a port already in use by the
+benchmark, and the model it displaced was not brought back), and once
+deliberately with Dave's authorisation to free both cards. Neither interruption
+affected the measurements, but the earlier draft of this section claimed the
+stack was never stopped, which was wrong. If you repeat this, assume you will
+take the chat down and plan the restart, rather than assuming you can bench
+alongside it.
+
+The image built for this investigation, `llama-rocm714-wmma:latest`, **has since
+been deleted**, along with its build container. Do not go looking for it. The
+rocWMMA 2.2.1 vendoring recipe in "Getting a rocWMMA that actually works" above
+is self-contained and is now the only copy — rebuild from that if this ever
+needs revisiting. It should not: see the conclusion.
