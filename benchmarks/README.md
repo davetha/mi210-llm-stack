@@ -81,6 +81,21 @@ Qwen3-14B bf16, same hardware, attention backend the only variable:
 > calls `on_mi3xx()` (gfx942/gfx950) while documenting itself as gfx9, and the
 > failure is silent. See [`configs/enable_vllm_aiter_gfx90a.py`](../configs/enable_vllm_aiter_gfx90a.py).
 
+**FP8 weight-only on CDNA2** (same writeup, part 3) — Qwen3-14B-FP8, block-quantized:
+
+| | bf16 | FP8 | |
+|---|---:|---:|---|
+| Weights in VRAM | 27.52 GiB | 15.71 GiB | 1.75× saving, **survives** |
+| KV cache | 172,000 tok | 240,992 tok | 1.40× more |
+| Output tok/s (128 tok, conc 8) | 198.1 | 19.8 | **0.10×** |
+
+> FP8 loads, keeps its weights as `float8_e4m3fn` in VRAM (no load-time
+> dequant), and **still reaches the bf16 ASM attention kernels** — the
+> weight-only hypothesis holds. But it serves 10–15× slower: the only FP8 GEMM
+> available on CDNA2 is an untuned Triton block-scaled kernel that peaks at
+> **8.3 TFLOP/s vs bf16's ~96** on the same shapes. Not a hardware limit — a
+> missing tuning config, and the warning names the exact file.
+
 ---
 
 ## Summary Table

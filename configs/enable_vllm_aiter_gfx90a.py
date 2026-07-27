@@ -41,6 +41,22 @@ checks. Both guard FP8 scaled-GEMM paths, and CDNA2 has no FP8 ALU, so widening
 them would route gfx90a into kernels it cannot execute. `on_mi3xx()` is the
 correct condition there; it is only wrong as a stand-in for "supports AITER".
 
+Known side effect
+-----------------
+Widening the master gate also makes AITER's own FP8 GEMM kernels *selectable*
+on gfx90a, because they gate on `rocm_aiter_ops.is_linear_enabled()` /
+`is_linear_fp8_enabled()`, which funnel through the same check. The one that
+matters is `AiterFp8BlockScaledMMKernel`, a candidate for block-quantized FP8
+checkpoints. It cannot be gated more tightly from here without disabling
+AITER's INT8 and bf16 linear paths too, which do work.
+
+Serving an FP8 model on CDNA2 with `VLLM_ROCM_USE_AITER_LINEAR=1` may therefore
+dispatch to an FP8 GEMM on hardware with no FP8 ALU. Set
+`VLLM_ROCM_USE_AITER_LINEAR=0` for FP8 work on gfx90a. Note this is a
+correctness hazard only for FP8; see part 3 of
+benchmarks/vllm-aiter-asm-gfx90a.md, where FP8 was measured with AITER's linear
+ops off throughout.
+
 This does not by itself select an AITER backend -- it only makes one selectable.
 See benchmarks/vllm-aiter-asm-gfx90a.md for the env vars that pick it, and note
 that `VLLM_ATTENTION_BACKEND` is not a recognised variable in vLLM 0.23.x;
