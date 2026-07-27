@@ -29,8 +29,12 @@ silently serving stale objects.
 /var/cache/mi210-ccache      # host, on / (507 GB free), mode 1777
 ```
 
-**Not** `/mnt/llm-storage` — that NVMe volume is at 96% (82 GB free) and holds
-the models.
+`/mnt/llm-storage` is the alternative. When this was written that NVMe volume
+was at 96% (82 GB free), which made the choice obvious; after a model cleanup on
+2026-07-27 it sits at 8% (1.8 TB free), so the capacity argument no longer
+decides it. Keep the cache on `/` anyway — it is small, it is not model data,
+and separating build artifacts from weights means a `du` on either one still
+means something.
 
 ## Build containers (llama.cpp and friends)
 
@@ -114,8 +118,12 @@ that a repeat compile is a ccache hit instead.
 add a bind mount to a running container. Its only host-backed path is the
 existing `/mnt/llm-storage:/models` mount, so its cache is at
 `/models/ccache-aiter` (host `/mnt/llm-storage/ccache-aiter`), capped at 40 GB —
-on the *small* volume, against the general rule above. It still survives
-container churn, which is the point.
+on the other volume, against the general rule above. It still survives container
+churn, which is the point.
+
+That split was originally a space worry, since `/mnt/llm-storage` was nearly
+full. It is not any more (8% used as of 2026-07-27), so this is now purely a
+tidiness wart rather than a risk.
 
 It also runs ccache **4.9.1** (from its own Ubuntu base) versus 4.12.3
 elsewhere, which is a second reason to keep its cache directory separate.
