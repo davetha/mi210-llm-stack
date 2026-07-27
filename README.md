@@ -77,6 +77,9 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 - [`docs/07-ktransformers-poc-results.md`](docs/07-ktransformers-poc-results.md) — KTransformers POC: 3 independent blockers, cannot serve on this hardware
 - [`docs/08-platform-gaps-gfx90a.md`](docs/08-platform-gaps-gfx90a.md) — consolidated CDNA2 vs CDNA3 gap analysis, why llama.cpp sidesteps every gap
 - [`docs/09-flashattention-gfx90a-patching.md`](docs/09-flashattention-gfx90a-patching.md) — why FA is a regression on gfx90a, the V-dequant gap, three patching approaches
+- [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md) — which of AITER's 1,422 ASM kernels can run on gfx90a, and why the other 1,180 cannot
+- [`docs/20-int8-gemm-gfx90a.md`](docs/20-int8-gemm-gfx90a.md) — INT8 GEMM built from source on gfx90a, bit-exact, 4.3x at decode shapes
+- [`docs/21-fp8-block-gemm-gfx90a.md`](docs/21-fp8-block-gemm-gfx90a.md) — block-scaled FP8 was never a tuning problem; gfx90a has no FP8 *decoder*, and a 3-instruction bit trick fixes it
 
 ### Benchmarks
 - [`benchmarks/README.md`](benchmarks/README.md) — **all measured performance numbers in one place** (vLLM single/TP=2, llama.cpp, TurboQuant, KIVI, FlashAttention, KTransformers)
@@ -144,6 +147,18 @@ The result is **bit-exact** on every shape tested, verified against an exact fp6
 - **Memory-bound (decode):** at M=16, N=K=8192, **4.3×** faster than bf16 — half the weight bytes, moved at 73% of HBM bandwidth.
 
 So quantization on this hardware should be justified by memory traffic and capacity, never by arithmetic throughput. See [`docs/20-int8-gemm-gfx90a.md`](docs/20-int8-gemm-gfx90a.md).
+
+### 4. Block-scaled FP8 was never a tuning problem — gfx90a has no FP8 *decoder*
+FP8 serving was 10–15x slower than bf16, and the obvious explanation was the missing tuning config vLLM warns about by name. Disassembly says otherwise: vLLM's block-FP8 kernel is **11,997 instructions, of which 64 are MFMA and 7,106 are `v_cmp_ne_u16`/`v_cndmask_b32`** — a software emulation of `e4m3 -> fp16`, because `v_cvt_pk_fp8_f32` does not assemble for gfx90a. A convert-only kernel pins the cost to the format: **117 VALU ops per 4 e4m3 values, against 11 for e5m2 and 11 for int8**, both of which decode with a shift. AMD's `fnuz` spelling does not help (118).
+
+Reinterpreting the bits instead of converting them is exact and nearly free — `h = ((u & 0x80) << 8) | ((u & 0x7f) << 7)` yields an fp16 holding exactly `2^-8` times the value, for normals and denormals alike, and folding `2^16` into the accumulator restores it. **Bit-exact on all 254 non-NaN byte patterns**; 11,997 instructions become 3,954 with the same 64 MFMA.
+
+- 5.5–6x faster than the stock kernel before any tuning; tuning composes with it.
+- Tuning *alone* recovers only part of the gap (12.6x → 4.1x at M=1 `qkv_proj`); decode + tuning reaches **1.24x**.
+- And at decode the GEMM is weight-bandwidth-bound, so FP8 does not just catch up — at M=1 `gate_up_proj` it runs at **0.59x of bf16's time**.
+- **In serving: `Qwen3-14B-FP8` on one MI210 goes from 2.7 to 28.9 tok/s (10.7x), TPOT 373 ms → 34 ms.** FP8 now runs at ~0.73x of bf16 throughput with 1.75x less weight memory and 1.40x more KV cache — a trade worth making, where 0.07x was not.
+
+Also settles the open question on AITER's FP8 GEMM: its **CK** kernel is genuinely FP8-hardware-dependent (it selects `mfma_f32_16x16x32f8f8`, which the assembler rejects for gfx90a), but on gfx90a `_hip_blockscale_supported()` falls back to aiter's **Triton** kernel, which is dequant-based and runs fine. Opening the gate would route to Triton, not ASM. See [`docs/21-fp8-block-gemm-gfx90a.md`](docs/21-fp8-block-gemm-gfx90a.md).
 
 ## License
 
