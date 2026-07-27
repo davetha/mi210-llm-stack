@@ -47,8 +47,14 @@ start_server() {
   local env=(VLLM_PLUGINS= AITER_LOG_LEVEL=info)
   local extra=()
 
-  # The AITER master switch also enables AITER linear/MoE/RMSNorm/FP8-BMM, none
-  # of which are attention. They stay off so the A/B isolates attention.
+  # The AITER master switch also asks for AITER linear/MoE/RMSNorm/FP8-BMM,
+  # none of which are attention. They stay off so the A/B isolates attention.
+  #
+  # With enable_vllm_aiter_gfx90a.py applied these pins are belt and braces on
+  # gfx90a: that script widens only the two attention gates, so the master
+  # check still refuses every non-attention op whatever these are set to. They
+  # are kept because they state the intent, and because they do bite on an
+  # MI300 where the master gate passes.
   local attn_only=(
     VLLM_ROCM_USE_AITER=1 VLLM_ROCM_USE_AITER_MHA=1
     VLLM_ROCM_USE_AITER_LINEAR=0 VLLM_ROCM_USE_AITER_MOE=0

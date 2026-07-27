@@ -79,7 +79,11 @@ Qwen3-14B bf16, same hardware, attention backend the only variable:
 >
 > vLLM could not reach AITER on gfx90a at all before this: its dispatch gate
 > calls `on_mi3xx()` (gfx942/gfx950) while documenting itself as gfx9, and the
-> failure is silent. See [`configs/enable_vllm_aiter_gfx90a.py`](../configs/enable_vllm_aiter_gfx90a.py).
+> failure is silent. [`configs/enable_vllm_aiter_gfx90a.py`](../configs/enable_vllm_aiter_gfx90a.py)
+> opens it for **attention only** — the master gate stays closed so AITER's
+> GEMM/MoE/FP8 paths remain unreachable on a chip with no FP8 ALU — and
+> separately *narrows* the `torch._scaled_mm` gate, which wrongly admits gfx90a
+> because CDNA2 reports compute capability 9.0.
 
 **FP8 weight-only on CDNA2** (same writeup, part 3) — Qwen3-14B-FP8, block-quantized:
 
