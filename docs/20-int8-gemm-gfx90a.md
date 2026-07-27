@@ -168,11 +168,11 @@ the log line `not found tuned config ... will use default config!` is expected.
 
 | M | N | K | INT8 | vs 181 peak | BF16 (torch/hipBLASLt) | speedup |
 |---:|---:|---:|---|---|---|---|
-| 4096 | 4096 | 4096 | 102.3 TOP/s | 57% | 95.4 TFLOP/s | 1.07× |
-| 8192 | 8192 | 8192 | 95.7 TOP/s | 53% | 94.7 TFLOP/s | 1.01× |
-| 2048 | 4096 | 4096 | 88.4 TOP/s | 49% | 93.0 TFLOP/s | 0.95× |
-| 1024 | 8192 | 8192 | 91.2 TOP/s | 50% | 87.9 TFLOP/s | 1.04× |
-| 16 | 8192 | 8192 | 38.0 TOP/s | 21% | 8.9 TFLOP/s | **4.30×** |
+| 4096 | 4096 | 4096 | 102.4 TOP/s | 57% | 95.5 TFLOP/s | 1.07× |
+| 8192 | 8192 | 8192 | 95.8 TOP/s | 53% | 94.9 TFLOP/s | 1.01× |
+| 2048 | 4096 | 4096 | 87.9 TOP/s | 49% | 93.5 TFLOP/s | 0.94× |
+| 1024 | 8192 | 8192 | 91.2 TOP/s | 50% | 88.2 TFLOP/s | 1.03× |
+| 16 | 8192 | 8192 | 38.8 TOP/s | 21% | 8.9 TFLOP/s | **4.36×** |
 
 **Compute-bound shapes: INT8 is a wash.** It lands at 49–57% of the 181 TOPS
 ceiling — but bf16 via hipBLASLt lands at 49–53% of the *same* 181 TFLOPS
@@ -183,7 +183,7 @@ win here because both paths share one ceiling.
 **Memory-bound shapes: INT8 is a large win.** At M=16, N=K=8192 the weight
 matrix dominates: 134 MB in bf16, 67 MB in INT8. Against MI210's 1638 GB/s HBM
 bandwidth the floors are 82 µs and 41 µs. Measured 242 µs (34% of bandwidth) and
-56 µs (**73% of bandwidth**). So INT8 wins 4.3×, not 2× — half the bytes, moved
+55 µs (**73% of bandwidth**). So INT8 wins 4.36×, not 2× — half the bytes, moved
 by a much better kernel.
 
 ### Is a tuning run worth doing?
@@ -197,7 +197,7 @@ little to recover. The effort is better spent elsewhere.
 ### What this means for the LLM stack
 
 - **Decode (memory-bound, small M):** INT8 weights are worth real throughput on
-  MI210 — 4.3× on the shape measured, from halved weight traffic plus a
+  MI210 — 4.36× on the shape measured, from halved weight traffic plus a
   bandwidth-efficient kernel.
 - **Prefill (compute-bound, large M):** INT8 is roughly neutral. Do not expect
   the 2× that CDNA3 INT8 delivers; CDNA2 does not have it to give.
