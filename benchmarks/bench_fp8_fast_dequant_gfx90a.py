@@ -94,6 +94,16 @@ def rel_err(out, ref):
             / ref.float().abs().mean()).item()
 
 
+def is_correct(out, ref, tol=0.02):
+    """Written as `not (err < tol)` on purpose.
+
+    `nan > tol` is False, so the natural spelling silently accepts a kernel that
+    returns NaN -- which is exactly how a broken CK build got itself timed
+    before this was caught.
+    """
+    return not (rel_err(out, ref) >= tol) and torch.isfinite(out).all().item()
+
+
 def timeit(fn, warmup=3, iters=10):
     for _ in range(warmup):
         fn()
@@ -170,7 +180,7 @@ def sweep(runner, space, xq, wq, xs, ws, ref, label):
         try:
             out = runner(xq, wq, xs, ws, cfg)
             torch.cuda.synchronize()
-            if rel_err(out, ref) > 0.02:
+            if not is_correct(out, ref):
                 continue
             t = timeit(lambda: runner(xq, wq, xs, ws, cfg), warmup=2, iters=5)
             ok += 1
@@ -229,6 +239,11 @@ def main() -> None:
                 if cfg is None:
                     continue
                 out = runner(xq, wq, xs, ws, cfg)
+                if not is_correct(out, ref):
+                    print(f"      {label} tuned WINNER IS WRONG "
+                          f"(relerr={rel_err(out, ref)}) -- not reported",
+                          flush=True)
+                    continue
                 row[f"{label}_tuned_us"] = t
                 row[f"{label}_tuned_relerr"] = rel_err(out, ref)
                 row[f"{label}_tuned_config"] = cfg
