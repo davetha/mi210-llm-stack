@@ -86,11 +86,21 @@ echo "ready after ${elapsed}s"
 rc=0
 for wl in cold16k longctx; do
     echo "--- workload $wl ---"
+    # longctx defaults to 262144, which on vLLM/gfx9 is ABOVE the
+    # use_rocm_custom_paged_attention ceiling (max_seq_len <= 128*1024) and
+    # therefore measures the Triton fallback rather than the quantization.
+    # LONGCTX_TOKENS lets a sweep pin it just under the ceiling; llama.cpp
+    # arms, which have no such gate, can leave it at the full 262144.
+    extra=()
+    if [ "$wl" = "longctx" ] && [ -n "${LONGCTX_TOKENS:-}" ]; then
+        extra=(--prompt-tokens "$LONGCTX_TOKENS")
+    fi
     python3 "$BIN/bench_matrix.py" \
         --url "http://127.0.0.1:$PORT" --model bench \
         --label "$LABEL" --workload "$wl" \
         --tier "$TIER" --quant "$QUANT" --engine "$ENGINE" \
         --vram-cmd "$VRAM_CMD" \
+        "${extra[@]}" \
         --out "$RESULTS/$LABEL-$wl.json" \
         2>&1 | tee -a "$LOGS/$LABEL-$wl.log"
     # PIPESTATUS, not $?: $? is tee's exit status, which is 0 even when the
