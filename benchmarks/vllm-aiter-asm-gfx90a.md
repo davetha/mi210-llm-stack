@@ -2,16 +2,22 @@
 
 **Date**: 2026-07-27 · **Hardware**: AMD Instinct MI210 (gfx90a / CDNA2, 64 GB HBM2e, 104 CU)
 **Software**: ROCm 7.14.0, PyTorch 2.11, amd-aiter 0.1.17, vLLM 0.23.1.dev1+g9ddef7117
-**Model**: Qwen/Qwen3-14B, bf16, 40 layers, 40 Q heads / 8 KV heads, head_dim 128
-**Reproduce**: `configs/enable_vllm_aiter_gfx90a.py` then `benchmarks/bench_vllm_serving.py`
+**Models**: Qwen/Qwen3-14B and Qwen/Qwen3-14B-FP8 — 40 layers, 40 Q heads / 8 KV
+heads, head_dim 128
+
+**Reproduce**: apply `configs/enable_vllm_aiter_gfx90a.py`, then
+`benchmarks/run-vllm-aiter-ab.sh` (drives `bench_vllm_serving.py`).
+Supporting probes: `benchmarks/probe_weight_dtypes.py` for what is actually
+resident in VRAM, `benchmarks/bench_fp8_block_gemm_gfx90a.py` for the FP8 GEMM.
 
 `asm-attention-gfx90a.md` measured AITER's hand-written ASM attention kernels in
 isolation and found them 1.86x faster than PyTorch SDPA at prefill and 1.72x
 faster than the HIP kernel at decode. It closed by naming the obvious open
 question: *whether vLLM actually reaches these kernels is a separate question.*
 
-This is the answer to that question. Two parts, and the first matters more than
-the second.
+This is the answer to that question, in three parts: whether vLLM can reach the
+kernels at all (part 1), what they are worth in bf16 serving (part 2), and
+whether an FP8 checkpoint can keep them while halving weight memory (part 3).
 
 ---
 
@@ -27,6 +33,11 @@ from the prefill side.
 | concurrency 1 | 1.02x | 1.01x |
 | concurrency 8 | 1.00x | **1.23x** |
 | concurrency 32 | 1.02x | **1.23x** |
+
+Part 3 adds a separate result: an FP8 checkpoint **does** keep the bf16 ASM
+attention kernels and **does** keep its memory saving (1.75x on weights, 1.40x
+more KV cache), but serves 10–15x slower, because the only FP8 GEMM available on
+CDNA2 is an untuned Triton kernel running at 4.6% of the card's peak.
 
 ---
 
@@ -273,6 +284,158 @@ and 10.7 s for vLLM. None of this says anything about the ASM kernels.
 
 ---
 
+## Part 3 — FP8 weights with bf16 ASM attention
+
+The hypothesis worth testing: attention operates on Q/K/V *activations*, not on
+weights, so an FP8 checkpoint whose linear layers dequantize to bf16 should
+still reach the bf16 ASM attention kernels. That would combine FP8's halved
+weight memory with ASM attention at no arithmetic cost, since on CDNA2 FP8 and
+bf16 share one 181 TFLOP/s ceiling rather than FP8 being 2x as on CDNA3.
+
+Tested with `Qwen/Qwen3-14B-FP8` — the same architecture as everything above, so
+it compares directly. It is **block-quantized** FP8 (`weight_block_size
+[128,128]`, dynamic activation scaling, e4m3).
+
+**The attention half of the hypothesis is exactly right. The arithmetic half is
+catastrophically wrong: FP8 keeps its memory saving and runs 10–15x slower.**
+
+### Does it load, and is the memory saving real?
+
+It loads and generates coherent text. The memory saving survives in full —
+weights are **not** dequantized at load time.
+
+Determined two ways rather than inferred. vLLM's own accounting:
+
+| | weights | KV cache | KV tokens |
+|---|---:|---:|---:|
+| bf16 | 27.52 GiB | 26.25 GiB | 172,000 |
+| FP8 | **15.71 GiB** | **36.77 GiB** | **240,992** |
+
+And by reading the tensors actually resident in VRAM after load
+(`benchmarks/` probe, `named_parameters()` walk):
+
+```
+torch.float8_e4m3fn        160 tensors     12.30 GiB
+torch.bfloat16             164 tensors      2.91 GiB
+model.layers.0.self_attn.qkv_proj.weight    torch.float8_e4m3fn  (7168, 5120)
+model.layers.0.mlp.gate_up_proj.weight      torch.float8_e4m3fn  (34816, 5120)
+```
+
+The projections are genuinely stored as `float8_e4m3fn`; the 2.91 GiB of bf16 is
+embeddings, norms and the LM head. Dequantization happens per tile inside the
+GEMM, so **1.75x less weight memory and 1.40x more KV cache** — 240,992 tokens
+against 172,000.
+
+### Do the ASM attention kernels still engage? Yes
+
+Same proof standard, from the FP8 server's log — identical kernels to the bf16
+runs:
+
+```
+[aiter] LoadKernel: _ZN5aiter37fmha_fwd_hd128_bf16_causal_rtna_groupE
+    hsaco: .../hsa//gfx90a/fmha_v3_fwd/MI300/fwd_hd128_bf16_causal_rtna_group.co
+[aiter] LoadKernel: _ZN5aiter27pa_bf16_noquant_gqa8_1tg_4wE
+    hsaco: .../hsa//gfx90a/pa/pa_bf16_noquant_gqa8_1tg_4w.co
+```
+
+Attention sees bf16 activations regardless of how the weights are stored, so the
+ASM path is untouched by quantization. **The mechanism Dave proposed is real.**
+
+### But the FP8 GEMM makes it unusable
+
+| prompt | conc | bf16 asm tok/s | FP8 asm tok/s | FP8 stock tok/s | FP8 vs bf16 |
+|---|---:|---:|---:|---:|---:|
+| 128 | 1 | 39.7 | 2.7 | 2.7 | **0.07x** |
+| 128 | 8 | 198.1 | 19.8 | 19.6 | **0.10x** |
+| 4096 | 1 | 27.4 | 2.1 | 2.1 | **0.08x** |
+
+TPOT sits at 373–383 ms in *every* FP8 cell — independent of prompt length and
+concurrency — against 25–26 ms for bf16. A per-step cost that does not move with
+batch size is the signature of a kernel that is overhead-bound rather than doing
+useful work.
+
+Note the FP8 `stock` column: with attention as the only difference, it matches
+the ASM column to within 1%. **The 1.23x from Part 2 vanishes entirely under
+FP8**, because attention is no longer anywhere near the bottleneck. Getting ASM
+attention "for free" alongside FP8 is worth nothing when the GEMM is 12x slower.
+
+### Why: the only available FP8 kernel is an untuned Triton one
+
+vLLM logs its choice:
+
+```
+Selected TritonFp8BlockScaledMMKernel for Fp8LinearMethod
+WARNING Using default W8A8 Block FP8 kernel config. Performance might be
+    sub-optimal! Config file not found at ...device_name=AMD_Instinct_MI210...
+```
+
+Every other block-scaled FP8 kernel is unavailable on CDNA2 — DeepGEMM wants
+Hopper, CUTLASS and Marlin are CUDA-only, and the AITER one needs AITER's linear
+ops (deliberately off here, see below). Triton's is the only candidate, and it
+has no tuned configuration for this device.
+
+Timing it directly against the bf16 matmul it replaces, at Qwen3-14B's own
+projection shapes (`bench_fp8_block_gemm_gfx90a.py`):
+
+| layer | M | bf16 µs | FP8 µs | FP8 TFLOP/s | slowdown |
+|---|---:|---:|---:|---:|---:|
+| qkv_proj | 1 | 87.6 | 1134.1 | 0.1 | 12.9x |
+| down_proj | 1 | 218.5 | 3663.7 | 0.0 | 16.8x |
+| qkv_proj | 32 | 92.9 | 1143.1 | 2.1 | 12.3x |
+| down_proj | 32 | 244.3 | 3696.6 | 1.5 | 15.1x |
+| qkv_proj | 4096 | 3240.2 | 39030.7 | 7.7 | 12.0x |
+| gate_up_proj | 4096 | 15229.1 | 187410.9 | 7.8 | 12.3x |
+| down_proj | 4096 | 7719.6 | 88326.7 | 8.3 | 11.4x |
+
+**The FP8 GEMM peaks at 8.3 TFLOP/s — 4.6% of the card's 181 TFLOP/s — while the
+bf16 matmul on the same shapes reaches ~96 TFLOP/s.** The 7–17x kernel gap fully
+accounts for the 10–15x end-to-end gap; nothing else needs explaining.
+
+The M=1 and M=32 rows are nearly identical (1134 vs 1143 µs), confirming the
+kernel is latency-bound at decode shapes and doing essentially no useful work —
+which is precisely why serving TPOT was pinned at ~375 ms.
+
+### Verdict
+
+**FP8 weight-only on gfx90a works, keeps its memory saving, and preserves ASM
+attention — but is not usable for serving.** Trading 12 GiB of VRAM for a 12x
+throughput loss is not a trade anyone wants. The blocker is not the hypothesis,
+which held; it is that CDNA2 has no tuned FP8 GEMM in any framework, which is
+the same missing-gfx90a-tuning-config problem that breaks Triton prefill
+attention and every tuned GEMM CSV under `aiter/configs/`.
+
+This is worth writing down because it closes the line of enquiry cleanly: the
+route to FP8 on CDNA2 is **not** blocked by the hardware lacking an FP8 ALU (the
+dequant-to-bf16 design sidesteps that exactly as predicted). It is blocked by
+kernel tuning. If someone tuned the Triton block-FP8 config for gfx90a — the
+warning names the exact missing file — this could plausibly become viable, and
+the memory-saving prize is real: 1.75x on weights and 1.40x more KV cache.
+
+### Two related notes
+
+**`torch._scaled_mm` is hard-gated below MI300**, verified directly:
+
+```
+RuntimeError: torch._scaled_mm is only supported on CUDA devices with
+compute capability >= 9.0 or 8.9, or ROCm MI300+
+```
+
+This did not affect the run above, because block-quantized checkpoints route to
+the block-scaled kernels instead. But gfx90a reports compute capability 9.0,
+which *passes* vLLM's `>= 89` check in `TorchFP8ScaledMMLinearKernel`. By code
+reading, a **per-tensor or per-channel** FP8 checkpoint would therefore select
+that kernel and then fail at runtime on this hardware. Not tested end to end —
+no such checkpoint was run — so treat it as a prediction, not a measurement.
+
+**`enable_vllm_aiter_gfx90a.py` makes `AiterFp8BlockScaledMMKernel` selectable.**
+It gates on `rocm_aiter_ops.is_linear_enabled()`, which now answers truthfully on
+gfx90a. Every configuration in this document pins `VLLM_ROCM_USE_AITER_LINEAR=0`,
+so it was never selected here — but anyone enabling AITER's linear ops on CDNA2
+with an FP8 model should expect to meet an AITER FP8 GEMM on hardware with no
+FP8 ALU. The patch script documents this.
+
+---
+
 ## Method
 
 Three configurations, differing only in attention:
@@ -344,9 +507,14 @@ card and fails with the same misleading free-memory error.
 - **Prompts beyond 4096 tokens.** `--max-model-len` was 8192. The trend from
   128 to 4096 is strongly increasing, so the 1.23x is likely a floor rather
   than a ceiling for long-context serving.
-- **Anything but bf16 dense.** FP8, INT8 and MoE paths are untouched; CDNA2 has
-  no FP8 ALU and the GEMM tuning configs have no gfx90a rows (see
-  `asm-attention-gfx90a.md`).
+- **INT8 and MoE.** Untouched here. FP8 dense is covered in part 3; INT8 GEMM
+  is `docs/20-int8-gemm-gfx90a.md`.
+- **Per-tensor FP8 checkpoints.** Only a block-quantized one was run. The
+  `torch._scaled_mm` prediction in part 3 is code reading plus a direct kernel
+  test, not an end-to-end measurement.
+- **A tuned FP8 config.** Part 3's conclusion is about the *untuned* Triton
+  block-FP8 kernel, which is the only one available on CDNA2 today. Whether
+  tuning it would close the 12x gap is untested.
 - **Multi-GPU.** Single MI210. The pair has no xGMI bridge.
 - **Variance.** Each cell is one run of 8–96 requests. `aiter-fa-asm` was
   re-run end to end as a reproducibility check and agreed to within **1.0%**

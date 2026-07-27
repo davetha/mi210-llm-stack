@@ -14,6 +14,10 @@ MODEL=${MODEL:-Qwen/Qwen3-14B}
 PORT=${PORT:-8000}
 OUTDIR=${OUTDIR:-/root}
 BENCH=${BENCH:-/root/bench_vllm_serving.py}
+# CASES trims the sweep, as promptlen:concurrency pairs. Useful when a
+# configuration is slow enough that the full grid would take hours -- the FP8
+# runs are ~15x slower per token than bf16.
+CASES=${CASES:-}
 # Device 0 in HIP terms. Note this is the card rocm-smi calls GPU[1] -- the
 # orderings are reversed, and picking the wrong one fails with a free-memory
 # error that looks like a config problem.
@@ -89,8 +93,9 @@ for cfg in "${CONFIGS[@]}"; do
   fi
   echo "=== $cfg: ready $(date +%H:%M:%S) ==="
 
-  python "$BENCH" --label "$cfg" --model "$MODEL" \
-         --out "$OUTDIR/results-$cfg.json" 2>&1 | tee "$OUTDIR/bench-$cfg.log"
+  bench_args=(--label "$cfg" --model "$MODEL" --out "$OUTDIR/results-$cfg.json")
+  [ -n "$CASES" ] && bench_args+=(--cases $CASES)
+  python "$BENCH" "${bench_args[@]}" 2>&1 | tee "$OUTDIR/bench-$cfg.log"
 
   # Kernel provenance, read AFTER traffic: aiter logs LoadKernel lazily, on
   # first use. An empty list here for an aiter-* config means the ASM path was
