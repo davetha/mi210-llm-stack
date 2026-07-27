@@ -12,11 +12,29 @@ Everything that does **not** work on the AMD MI210 (gfx90a / CDNA2) and why — 
 | Wavefront | **64 lanes (wave64)** | 64 lanes |
 | xGMI / P2P | ❌ not on MI210 (PCIe only) | ✅ |
 
-### Why rocWMMA FlashAttention fails
+### Why rocWMMA FlashAttention loses
 
-llama.cpp's `rocWMMA`-based FlashAttention (`GGML_HIP_ROCWMMA_FATTN`) requires the CDNA3 matrix-core instruction extensions. The MI210 has **Matrix Core** (MFMA fp16), but the rocWMMA fragment layouts and the WMMA accumulator instructions the FA path uses are gated to `gfx942+`. On gfx90a the build **compiles but the fragments don't map**, so FA either crashes or silently produces wrong results.
+llama.cpp's `rocWMMA`-based FlashAttention (`GGML_HIP_ROCWMMA_FATTN`) is a
+**performance** loss on gfx90a, not a correctness or capability one. Measured on
+an MI210 with rocWMMA 2.2.1, it runs correctly and is 18-26% slower at prefill
+(1,761 -> 1,440 tok/s at 16k; 1,713 -> 1,273 tok/s at 24k), degrading further
+with context length.
 
-**Must build with:** `-DGGML_HIP_ROCWMMA_FATTN=OFF`.
+The reason is that ggml already reaches the matrix cores without it. With the
+flag OFF, gfx90a falls through to the modern `fattn-mma-f16` kernel, whose
+gfx90a code object is full of `v_mfma_f32_16x16x16f16`. Turning rocWMMA ON only
+*diverts* attention to the older `fattn-wmma-f16` kernel, which emits the same
+MFMA instruction with worse blocking.
+
+**This is not a tuning problem — do not retry it.** The flag does not turn the
+matrix cores on; it chooses between two kernels that both use them, and picks
+the worse one. Confirmed by three independent benchmark runs and by
+disassembling the shipped library.
+
+**Must build with:** `-DGGML_HIP_ROCWMMA_FATTN=OFF` — but note that setting it
+`ON` against the rocWMMA shipped with ROCm 7.1 (version 2.0.0) does nothing at
+all, because llama.cpp blacklists that exact version on CDNA. See
+[`22-rocwmma-flash-attention-gfx90a.md`](22-rocwmma-flash-attention-gfx90a.md).
 
 **What works instead:** standalone [FlashAttention 2.8.3 with the CK (Composable Kernel) backend](../guides/build-flashattention-gfx90a.md) — CK has a gfx90a codepath that rocWMMA lacks.
 

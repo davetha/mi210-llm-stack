@@ -1,81 +1,139 @@
-# Set Up ccache in Docker for Fast Incremental GPU Builds
+# Shared ccache for GPU builds on `big`
 
-GPU kernel compilation is the slowest part of building llama.cpp / FlashAttention
-on gfx90a — the CK backend alone is **2926 kernel objects**. ccache makes
-incremental rebuilds return from cache instantly. This is the single biggest
-build-time win after `MAX_JOBS`.
+GPU kernel compilation dominates every rebuild in this stack. Containers get
+recreated constantly, so the cache has to live on the **host** and be mounted
+in, or it dies with the container.
 
-## 1. Install ccache in the Docker image
+Measured on `big` (2026-07-27) building llama.cpp `llama-server` for gfx90a,
+419 cacheable compilations, `-j40`:
 
-Add to your Dockerfile (or run inside the container):
+| Build | Wall time | ccache hits |
+|---|---|---|
+| Cold (empty cache) | 109 s | 0 / 419 (0%) |
+| Full rebuild, fresh build dir | **25 s** | **405 / 419 (96.7%)** |
+| Rebuild after a header genuinely changed | 50 s | 293 / 419 (69.9%) |
 
-```dockerfile
-RUN apt-get update && apt-get install -y ccache
+The 96.7% case is the one that matters: deleting the build directory entirely
+and reconfiguring from scratch costs 25 s instead of 109 s, a **4.4x** speedup.
+The 13 misses are translation units that embed the build path.
+
+The third row is the correctness check, not a failure. Installing a different
+rocWMMA version changed `rocwmma-version.hpp`, which every `ggml-cuda`
+translation unit includes; ccache correctly invalidated exactly those 126 and
+reused the other 293. A cache that had "hit" 100% there would have been
+silently serving stale objects.
+
+## Where it lives
+
+```
+/var/cache/mi210-ccache      # host, on / (507 GB free), mode 1777
 ```
 
-## 2. Configure CMake to use ccache as a compiler launcher
+**Not** `/mnt/llm-storage` — that NVMe volume is at 96% (82 GB free) and holds
+the models.
 
-Add these flags to your `cmake -B build` command:
+## Build containers (llama.cpp and friends)
+
+Mount the host directory and set the environment at `docker run` time:
 
 ```bash
-cmake -B build \
-  -DGPU_TARGETS=gfx90a -DGGML_HIP=ON -DGGML_HIP_ROCWMMA_FATTN=OFF \
-  -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_FA_ALL_QUANTS=ON -DLLAMA_CURL=OFF \
+docker run -d --name my-build --entrypoint /bin/bash \
+  --device /dev/kfd --device /dev/dri --group-add video \
+  --security-opt seccomp=unconfined --ipc=host --shm-size 16G \
+  -v /var/cache/mi210-ccache:/ccache \
+  -v /mnt/llm-storage:/models \
+  -e CCACHE_DIR=/ccache \
+  -e CCACHE_MAXSIZE=100G \
+  -e CCACHE_DEPEND=1 \
+  -e CCACHE_SLOPPINESS=locale,time_macros,include_file_ctime,include_file_mtime \
+  llama-rocm714:latest -c "sleep infinity"
+
+docker exec my-build bash -lc "apt-get update -qq && apt-get install -y ccache"
+```
+
+> `llama-rocm714:latest` has `ENTRYPOINT ["/src/build/bin/llama-server"]`, so
+> `--entrypoint /bin/bash` is required or the container exits with
+> `error: invalid argument: sleep`.
+
+`CCACHE_DEPEND=1` is the setting that earns its keep. Depend mode hashes the
+recorded dependency list instead of re-running the preprocessor, which matters
+enormously given Composable Kernel's header weight. All 405 hits above were
+direct-mode hits, zero preprocessed.
+
+### CMake
+
+Pass all three launchers. The HIP one is the important one — the `.cu` files are
+compiled as HIP, so `CMAKE_CXX_COMPILER_LAUNCHER` alone misses every GPU kernel:
+
+```bash
+cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_HIP=ON -DGPU_TARGETS=gfx90a -DAMDGPU_TARGETS=gfx90a \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_HIP_COMPILER_LAUNCHER=ccache
 ```
 
-| Flag | What it does |
-|------|-------------|
-| `CMAKE_CXX_COMPILER_LAUNCHER=ccache` | Wraps the C++ compiler with ccache. |
-| `CMAKE_HIP_COMPILER_LAUNCHER=ccache` | Wraps the HIP (`hipcc`) compiler with ccache — **this is the important one** for GPU kernels. |
-
-> If your CMake version doesn't recognize `CMAKE_HIP_COMPILER_LAUNCHER`, set
-> `CCACHE_CPP2=yes` and prefix `hipcc` with `ccache` via `CMAKE_HIP_COMPILER=ccache\ hipcc`.
-
-## 3. Mount a persistent cache directory
-
-The cache must survive container restarts to be useful. Mount a host directory:
+Confirm it took effect before trusting a build time:
 
 ```bash
-docker run --rm \
-  --device=/dev/kfd --device=/dev/dri --group-add 44 --group-add 991 \
-  -v /mnt/llm-storage/ccache:/root/.ccache \
-  -v /mnt/llm-storage/turbo-build/src:/build/src \
-  -w /build/src/build \
-  --entrypoint bash \
-  llama-rocm714:latest \
-  -c 'cmake --build . --target ggml-hip llama-cli -- -j$(nproc)'
+grep -c ccache build/ggml/src/ggml-hip/CMakeFiles/ggml-hip.dir/build.make   # 141
 ```
 
-On `big` the cache lives at `/mnt/llm-storage/ccache` (the 1.9 TB btrfs NVMe volume).
+## aiter's JIT needs the binary shadowed, not the PATH changed
 
-## Impact
-
-| Build type | Without ccache | With ccache (warm) |
-|------------|---------------|--------------------|
-| Full clean build | ~60 min | ~60 min (cold) |
-| Incremental (1 file changed) | ~3–8 min | **<30 s** |
-| Incremental (after `git stash`/`pop`) | ~60 min | **<2 min** |
-
-The GPU kernel `.o` files return from cache on the hash of (source + compiler flags + `GPU_TARGETS`). Changing only a non-kernel source file means all 2926 CK objects are cache hits.
-
-## 4. Verify ccache is working
+aiter resolves its compiler to an **absolute path**
+(`aiter/jit/core.py` -> `executable_path("hipcc")`), so putting ccache earlier
+in `PATH` does nothing. The compiler binary itself has to be shadowed:
 
 ```bash
-ccache --show-stats
-# after a build:
-ccache --show-stats | grep "Cacheable calls"
+mv /opt/rocm/bin/hipcc /opt/rocm/bin/hipcc.real
+cp hipcc-ccache-shim /opt/rocm/bin/hipcc     # see configs/hipcc-ccache-shim
+chmod 755 /opt/rocm/bin/hipcc
 ```
 
-You should see `Hits:` increasing on the second build.
+The shim `exec`s `ccache /opt/rocm/bin/hipcc.real "$@"` and sets cache defaults
+that the environment can still override.
 
-## 5. Cache size tuning
-
-The default max is 5 GB. For GPU builds, bump it:
+**Verify before you walk away, and keep a rollback ready** — a broken shim
+silently breaks every future JIT compile in that container:
 
 ```bash
-ccache --max-size 20G
-# or set in the container env:
-ENV CCACHE_MAXSIZE=20G
+echo 'int main(){return 0;}' > /tmp/t.hip
+/opt/rocm/bin/hipcc -x hip --offload-arch=gfx90a -c /tmp/t.hip -o /tmp/t.o
+# on failure: rm /opt/rocm/bin/hipcc && mv /opt/rocm/bin/hipcc.real /opt/rocm/bin/hipcc
 ```
+
+Do **not** compare the object bytes against the real compiler's and conclude the
+shim is corrupting output — `hipcc` is nondeterministic and produces different
+bytes on every run even when invoked twice identically. Compare sizes and check
+that a repeat compile is a ccache hit instead.
+
+### `fa-build` is a special case
+
+`fa-build` holds the AITER ASM work and must not be restarted, and Docker cannot
+add a bind mount to a running container. Its only host-backed path is the
+existing `/mnt/llm-storage:/models` mount, so its cache is at
+`/models/ccache-aiter` (host `/mnt/llm-storage/ccache-aiter`), capped at 40 GB —
+on the *small* volume, against the general rule above. It still survives
+container churn, which is the point.
+
+It also runs ccache **4.9.1** (from its own Ubuntu base) versus 4.12.3
+elsewhere, which is a second reason to keep its cache directory separate.
+
+Next time `fa-build` is legitimately recreated, give it
+`-v /var/cache/mi210-ccache:/ccache` and drop the separate directory.
+
+## Verifying the cache actually works
+
+A silently-missing ccache is worse than none, because it hides its own cost.
+Always check hits rather than assuming:
+
+```bash
+ccache -z                      # zero stats before the build
+cmake --build build -j40
+ccache -s | grep -E "Cacheable|Hits:|Misses:"
+```
+
+Expect near-zero hits on the first build and a high hit rate on the second. If
+the second build is still all misses, the launcher never reached the compiler —
+check `build.make` as above.

@@ -23,6 +23,13 @@ quantization — forcing users to either:
 4. When rocWMMA FA is disabled (as on our build), FA falls back to a GENERIC kernel
 5. This generic FA fallback is much slower than standard non-FA attention
 
+> **Superseded (2026-07-27).** Points 4 and 5 are wrong for current llama.cpp.
+> With rocWMMA disabled, gfx90a does *not* fall back to a generic kernel — it
+> routes to `fattn-mma-f16`, which uses `v_mfma_f32_16x16x16f16` on the matrix
+> cores, verified by disassembling the shipped `libggml-hip.so`. Enabling
+> rocWMMA is measurably *slower*. See
+> [`22-rocwmma-flash-attention-gfx90a.md`](22-rocwmma-flash-attention-gfx90a.md).
+
 ### Why FA-off Can't Do V Quantization
 1. The non-FA attention path has K cache dequantization code (works fine)
 2. The non-FA attention path is MISSING V cache dequantization code
