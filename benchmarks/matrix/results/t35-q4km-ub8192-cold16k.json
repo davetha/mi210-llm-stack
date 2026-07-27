@@ -1,0 +1,67 @@
+{
+  "label": "t35-q4km-ub8192",
+  "tier": "35B",
+  "quant": "q4_k_m",
+  "engine": "llamacpp",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15027,
+  "ttft_s_median": 6.03047254300327,
+  "ttft_s_min": 5.9535990380099975,
+  "ttft_s_max": 6.107346047996543,
+  "implied_prefill_tps_median": 2497.570975165801,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "s or additional words\u2014just the one word they requested.\n\nOkay, I'll go with \"ACKNOWLEDGED\" as the response.\nACKNOWLEDGED",
+  "reps": 2,
+  "vram_before": null,
+  "vram_after": null,
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 5.9535990380099975,
+      "total_s": 6.006508600024972,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a very",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15027,
+        "total_tokens": 15035,
+        "prompt_tokens_details": {
+          "cached_tokens": 3
+        }
+      },
+      "rep": 0,
+      "marker": "5f15c4b95fe1410aa865c2bf30bad8ae",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785195376.627908,
+      "actual_prompt_tokens": 15027,
+      "implied_prefill_tps": 2524.0194887264033,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 6.107346047996543,
+      "total_s": 6.160274030000437,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a long",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15092,
+        "total_tokens": 15100,
+        "prompt_tokens_details": {
+          "cached_tokens": 6
+        }
+      },
+      "rep": 1,
+      "marker": "5cd4b14b0e6c432b8d0264a256551840",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785195382.6366537,
+      "actual_prompt_tokens": 15092,
+      "implied_prefill_tps": 2471.1224616051986,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}

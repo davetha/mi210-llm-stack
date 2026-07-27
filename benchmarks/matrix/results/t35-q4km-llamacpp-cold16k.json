@@ -1,0 +1,89 @@
+{
+  "label": "t35-q4km-llamacpp",
+  "tier": "35B",
+  "quant": "q4_k_m",
+  "engine": "llamacpp",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15143,
+  "ttft_s_median": 4.434216332971118,
+  "ttft_s_min": 4.295824702014215,
+  "ttft_s_max": 4.435680700989906,
+  "implied_prefill_tps_median": 3415.7102418618115,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": ", I'll output \"ACKNOWLEDGED\" and nothing more.\n\nOkay, keeping it clean and simple: just the word they want.\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": null,
+  "vram_after": null,
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 4.295824702014215,
+      "total_s": 4.349465867970139,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a long",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15143,
+        "total_tokens": 15151,
+        "prompt_tokens_details": {
+          "cached_tokens": 3
+        }
+      },
+      "rep": 0,
+      "marker": "f75f5d14c16f496cbabc017dcd77d760",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785195311.3677566,
+      "actual_prompt_tokens": 15143,
+      "implied_prefill_tps": 3525.0507295839584,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 4.435680700989906,
+      "total_s": 4.489234893990215,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a very",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15151,
+        "total_tokens": 15159,
+        "prompt_tokens_details": {
+          "cached_tokens": 4
+        }
+      },
+      "rep": 1,
+      "marker": "35ec436bc5be4ee5988ba1c5de9af382",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785195315.719435,
+      "actual_prompt_tokens": 15151,
+      "implied_prefill_tps": 3415.7102418618115,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 4.434216332971118,
+      "total_s": 4.492554873984773,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a very",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15103,
+        "total_tokens": 15111,
+        "prompt_tokens_details": {
+          "cached_tokens": 4
+        }
+      },
+      "rep": 2,
+      "marker": "f46404b8ccf445758cdac6c2f517bd83",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785195320.2106693,
+      "actual_prompt_tokens": 15103,
+      "implied_prefill_tps": 3406.013343936319,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}

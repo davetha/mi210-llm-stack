@@ -1,0 +1,36 @@
+{
+  "label": "t35-awq-256kcfg-ctx110k",
+  "tier": "35B",
+  "quant": "awq",
+  "engine": "vllm",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 110000,
+  "actual_prompt_tokens": null,
+  "ttft_s_median": 110.37808426003903,
+  "ttft_s_min": 110.37808426003903,
+  "ttft_s_max": 110.37808426003903,
+  "implied_prefill_tps_median": 996.5746437567416,
+  "decode_tps_median": 1.7273231903732238,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "NOWLEDGED\" as instructed.\n\nThis is a simple task, so I'll respond with that one word immediately.\n</think>\n\nACKNOWLEDGED",
+  "reps": 1,
+  "vram_before": null,
+  "vram_after": null,
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 110.37808426003903,
+      "total_s": 134.69316351704765,
+      "stream_tokens": 43,
+      "decode_tps": 1.7273231903732238,
+      "text": "<think>\nThe user has provided a very long string of text that appears to be random words, possibly generated to test if I can recognize that it's not meaningful content. The instruction says \"session 1cd3",
+      "usage": null,
+      "rep": 0,
+      "marker": "1cd3a0d404214f869b99454a838fbea3",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785194956.5934727,
+      "implied_prefill_tps": 996.5746437567416
+    }
+  ]
+}
