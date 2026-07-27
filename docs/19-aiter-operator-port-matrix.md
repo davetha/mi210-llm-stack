@@ -22,6 +22,17 @@ operator to the whole ASM surface.
 2. **The split is exactly by data type.** Every bf16/fp16 ASM kernel in the
    attention families is portable. Every FP8 and INT8 kernel is not. CDNA2 has
    no FP8 ALU and no gfx942-shaped INT8 MFMA, so this is physics, not effort.
+
+   > **Scope note (added 2026-07-27).** The INT8 half of that sentence is about
+   > these **prebuilt ASM blobs**, and must not be read as "MI210 cannot do
+   > INT8". gfx90a has native INT8 MFMA at the full 181 TOPS —
+   > `v_mfma_i32_16x16x16i8` and `v_mfma_i32_32x32x8i8` both assemble for it.
+   > What is missing is gfx942's *encoding*: its INT8 MFMA takes K=32,
+   > gfx90a's takes K=16, so the two ISAs are disjoint at that opcode and the
+   > blobs cannot be patched across. INT8 kernels compiled **from source** for
+   > gfx90a work and are bit-exact — see
+   > [`20-int8-gemm-gfx90a.md`](20-int8-gemm-gfx90a.md). FP8 is the one
+   > genuinely absent capability; `v_cvt_pk_fp8_f32` does not assemble at all.
 3. **ASM flash-attention forward (`fmha_v3_fwd`) now works on gfx90a** — 48/48
    correctness configs pass. It was never a hardware limitation; it was six
    architecture-string comparisons in AITER's dispatch code.

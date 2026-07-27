@@ -27,7 +27,13 @@ C++, `aiter_meta/csrc/cpp_itfs/mha_fwd.cu` -- three sites:
   * `get_kernel_co_name`   inserts the `MI300/` or `MI308/` product subdirectory
   * `init_fmha_fwd_v3_args` applies an hdim 192x128 tuning override
 
-gfx90a is treated exactly like gfx942 in all three, which is correct because the
+Python + C++, `csrc/ck_gemm_a8w8/` -- four sites that together stop the CK
+INT8/FP8 GEMM module from generating FP8 kernel instances on gfx90a. CDNA2 has
+native INT8 MFMA but no FP8 at all, and four of the FP8 instances hang the
+compiler outright, taking the whole module (including all 36 working INT8
+instances) down with them. See the block comment on those patches.
+
+gfx90a is treated exactly like gfx942 in all three fmha sites, which is correct because the
 gfx90a `.co` files are byte-derived from the gfx942 ones: same kernel names, same
 config table, same kernarg layout. The MI300 branch is the right one -- MI210's
 PCI chip id (0x740f) is not in `MI308_CHIP_IDS`, so `is_mi308_device()` is false.
@@ -53,6 +59,8 @@ MHA_CU = f"{SITE}/aiter_meta/csrc/cpp_itfs/mha_fwd.cu"
 A4W4_PY = f"{SITE}/aiter/ops/gemm_op_a4w4.py"
 QUANT_PY = f"{SITE}/aiter/ops/quant.py"
 CORE_PY = f"{SITE}/aiter/jit/core.py"
+GEMM_GEN_PY = f"{SITE}/aiter_meta/csrc/ck_gemm_a8w8/gen_instances.py"
+GEMM_CU = f"{SITE}/aiter_meta/csrc/ck_gemm_a8w8/gemm_a8w8.cu"
 
 MARK = "gfx90a-asm-enable"
 
@@ -173,6 +181,129 @@ PATCHES = [
         '        # {MARK}: do not advertise FP4x2 to the compiler on gfx90a.\n'
         '        if (get_gfx() not in ("gfx942", "gfx90a")\n'
         '                and int(os.getenv("AITER_FP4x2", "1")) > 0):\n',
+        1,
+    ),
+
+    # ---------------------------------------------------------------------
+    # CK a8w8 GEMM: stop building FP8 instances on gfx90a.
+    #
+    # CDNA2 has native INT8 MFMA (v_mfma_i32_16x16x16i8 / _32x32x8i8, 181
+    # TOPS) but no FP8 anything -- v_cvt_pk_fp8_f32 does not even assemble.
+    # Only the gfx942 INT8 *encoding* (v_mfma_i32_16x16x32_i8, K=32) is
+    # unavailable, not the INT8 capability.
+    #
+    # All 36 INT8 instances compile cleanly in ~30 s each. Four of the 36 FP8
+    # instances do not compile at all: tile 256x224x256x128 ... intrawave_v3,
+    # across abF8 x {dB16,dF16,dF32} x {eB16,eF16}. With no FP8 MFMA to lower
+    # to, the backend scalarises the matrix op and the register allocator
+    # drowns -- observed at >17 minutes and ~5 GB RSS per translation unit
+    # before being killed, with no sign of converging. Ninja stops at the
+    # first failure, so those four take the whole module down, which is the
+    # only reason `aiter.gemm_a8w8` reports unavailable on gfx90a.
+    #
+    # The other 32 FP8 instances do compile, but only by emulating FP8 in
+    # software; they are dead weight that can never reach FP8 hardware. So
+    # rather than excise one tile, drop the FP8 half of the cross product
+    # entirely: it halves the build (36 instances, not 72) and it is the
+    # honest description of the hardware. `gemm_a8w8` then refuses FP8 input
+    # with a clear message instead of silently running an emulated path.
+    #
+    # This is worth reporting upstream as an LLVM issue: a target with no FP8
+    # MFMA should diagnose or fall back, not hang the register allocator.
+    #
+    # Three coupled sites, all keyed off get_gfx() at codegen time:
+    #   1. gen_instances.py imports  -- derive AB_DTYPES and FP8_GUARD_DEFINE
+    #   2. gen_instance()            -- emit only the AB_DTYPES instances
+    #   3. gen_manifest_head()       -- emit AITER_A8W8_NO_FP8 into the
+    #                                   generated manifest, which
+    #   4. gemm_a8w8.cu              -- reads to compile out the FP8 dispatch
+    #                                   (otherwise it would reference template
+    #                                   instantiations that no longer exist).
+    # On a non-gfx90a target all four are no-ops.
+    # ---------------------------------------------------------------------
+    # NOTE: this anchor deliberately runs through `class gemm_a8w8_fwd_codegen:`.
+    # Anchoring on the import block alone would make the pre-patch text a strict
+    # PREFIX of the post-patch text, so `apply()` would count it as both present
+    # and already-applied and insert the block again on every run.
+    (
+        GEMM_GEN_PY,
+        'from gemm_a8w8_common import (  # noqa: E402\n'
+        '    default_kernels_dict,\n'
+        '    kernelInstance,\n'
+        '    kernels_list,\n'
+        ')\n'
+        '\n'
+        '\n'
+        'class gemm_a8w8_fwd_codegen:\n',
+        'from gemm_a8w8_common import (  # noqa: E402\n'
+        '    default_kernels_dict,\n'
+        '    kernelInstance,\n'
+        '    kernels_list,\n'
+        ')\n'
+        '\n'
+        '# {MARK}: see the comment in configs/enable_gfx90a_asm_paths.py.\n'
+        '# AITER_CORE_DIR is already on sys.path from the chip_info import above.\n'
+        '#\n'
+        '# NOTE: instance generation is driven by the dict gen_instances() is\n'
+        '# called with -- default_kernels_dict via get_tune_dict() in the normal\n'
+        '# build, kernels_list only under --tune. Filtering kernels_list alone has\n'
+        '# no effect on a normal build.\n'
+        'from chip_info import get_gfx  # noqa: E402\n'
+        '\n'
+        '_NO_FP8 = get_gfx() == "gfx90a"\n'
+        'AB_DTYPES = ["I8"] if _NO_FP8 else ["I8", "F8"]\n'
+        'FP8_GUARD_DEFINE = "#define AITER_A8W8_NO_FP8 1\\n" if _NO_FP8 else ""\n'
+        '\n'
+        '\n'
+        'class gemm_a8w8_fwd_codegen:\n',
+        1,
+    ),
+    (
+        GEMM_GEN_PY,
+        '                for ABDtype in ["I8", "F8"]:\n',
+        '                for ABDtype in AB_DTYPES:  # {MARK}\n',
+        1,
+    ),
+    (
+        GEMM_GEN_PY,
+        '#include <torch/extension.h>\n'
+        '"""\n'
+        '        MAINFEST_template = """\n',
+        '#include <torch/extension.h>\n'
+        '""" + FP8_GUARD_DEFINE  # {MARK}\n'
+        '        MAINFEST_template = """\n',
+        1,
+    ),
+    (
+        GEMM_CU,
+        '  else\n'
+        '  {\n'
+        '    if (x_scale.dtype() == at::ScalarType::Float && Y.dtype() == at::ScalarType::Half)\n',
+        '  else\n'
+        '  {\n'
+        '#ifdef AITER_A8W8_NO_FP8\n'
+        '    // {MARK}: CDNA2 has no FP8 MFMA, so codegen did not emit the FP8\n'
+        '    // instances. Refuse loudly rather than dispatch into kernels that\n'
+        '    // are not in this build.\n'
+        '    TORCH_CHECK(false,\n'
+        '                "gemm_a8w8: fp8 input is not supported on this build -- gfx90a "\n'
+        '                "has no fp8 MFMA, so the fp8 kernel instances are excluded. "\n'
+        '                "Use int8 (torch.int8) inputs instead.");\n'
+        '#else\n'
+        '    if (x_scale.dtype() == at::ScalarType::Float && Y.dtype() == at::ScalarType::Half)\n',
+        1,
+    ),
+    (
+        GEMM_CU,
+        '      TORCH_CHECK(false, "Unsupported scales/output dtype!");\n'
+        '    }\n'
+        '  }\n'
+        '  return Y;\n',
+        '      TORCH_CHECK(false, "Unsupported scales/output dtype!");\n'
+        '    }\n'
+        '#endif  // {MARK}\n'
+        '  }\n'
+        '  return Y;\n',
         1,
     ),
 ]

@@ -128,11 +128,22 @@ AMD's AITER ships its ASM kernels as pre-compiled code objects for gfx942/gfx950
 
 - Swap `v_mfma_f32_16x16x16_bf16` (D3E1) → `v_mfma_f32_16x16x16bf16_1k` (**D3E7**) and rewrite ELF `e_flags`. That is the whole patch.
 - The split is exactly by **data type**: every bf16 attention kernel ports, every FP8/INT8 one does not. CDNA2 has no FP8 ALU, no gfx942-shaped INT8 MFMA, and no packed-bf16 atomic — so the 1,180 blocked kernels are arithmetic this hardware cannot do, not effort not yet spent.
+- ⚠️ That INT8 verdict is about the **prebuilt ASM blobs only**. gfx90a *does* have native INT8 MFMA at the full 181 TOPS; what it lacks is gfx942's K=32 encoding, which is why those blobs cannot be binary-patched. INT8 kernels compiled **from source** run fine — see insight 3.
 - Result: ASM paged-attention decode (48/48) and ASM flash attention (80/80) numerically exact.
 
 An earlier version of this section described a "3-layer patch" swapping D3E1 → **D3CD** (bf16 → f16) plus a `vgpr_count` rewrite. **Both were wrong.** gfx90a has BF16 MFMA, and its VGPR/AGPR file is unified so the register-count rewrite was unnecessary. Scripts implementing that patch are quarantined in [`configs/attic/`](configs/attic/).
 
 See [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md) for the full matrix and reproduction steps.
+
+### 3. INT8 GEMM works on MI210 — but buys throughput only where it saves bytes
+`aiter.gemm_a8w8` reported unavailable on gfx90a for a reason unrelated to INT8: four **FP8** kernel instances hang the LLVM register allocator indefinitely, and ninja stops at the first failure, taking all 36 working INT8 instances down with them. Excluding FP8 from the build (CDNA2 has no FP8 hardware to reach anyway) makes the module compile in ~170 s.
+
+The result is **bit-exact** on every shape tested, verified against an exact fp64 integer reference. But CDNA2 gives INT8 and BF16 the *same* 181 TOPS/TFLOPS peak — unlike CDNA3, where INT8 is 2×:
+
+- **Compute-bound (prefill):** 102 TOP/s at 4096³ = 57% of peak, versus bf16's 95 TFLOP/s = 53% of the *same* ceiling. A wash.
+- **Memory-bound (decode):** at M=16, N=K=8192, **4.3×** faster than bf16 — half the weight bytes, moved at 73% of HBM bandwidth.
+
+So quantization on this hardware should be justified by memory traffic and capacity, never by arithmetic throughput. See [`docs/20-int8-gemm-gfx90a.md`](docs/20-int8-gemm-gfx90a.md).
 
 ## License
 
