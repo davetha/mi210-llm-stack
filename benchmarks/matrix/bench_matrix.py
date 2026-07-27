@@ -65,6 +65,11 @@ WORDS = (
 # reader can tell the difference. Do not treat it as exact.
 TOKENS_PER_WORD = 1.5
 
+# Below this many generated tokens, a decode rate is scheduler jitter rather
+# than throughput, so it is reported as n/a instead of as a number someone
+# might quote.
+MIN_TOKENS_FOR_DECODE_RATE = 32
+
 
 def build_prompt(target_tokens, marker):
     """Unique filler of roughly `target_tokens`, with the uniqueness FIRST.
@@ -157,7 +162,12 @@ def stream_request(url, model, prompt, max_tokens, timeout, extra=None):
         "total_s": total,
         "stream_tokens": ntok,
         "decode_tps": decode_tps,
-        "text": "".join(text)[:200],
+        # Head AND tail. A reasoning model puts its actual answer at the very
+        # END, after a </think> block that can run for hundreds of tokens, so
+        # a head-only excerpt would make every correctness check fail on
+        # exactly the models most worth testing.
+        "text": ("".join(text)[:200] + " ...[snip]... " + "".join(text)[-300:]
+                 if sum(len(t) for t in text) > 500 else "".join(text)),
         "usage": usage,
     }
 
@@ -213,6 +223,32 @@ def read_vram(vram_cmd):
     return {"per_gpu_bytes": vals, "total_gb": round(sum(vals) / 1e9, 2)}
 
 
+def probe_correctness(url, model, timeout):
+    """One cheap request that proves the model and its kernels actually work.
+
+    This is deliberately SEPARATE from the timed runs. The obvious design --
+    append "reply ACKNOWLEDGED" to the 16k benchmark prompt and check the
+    output -- fails on reasoning models: Qwen3-*-Thinking emits a <think>
+    block first and needs ~250 tokens before it reaches the answer, so a
+    TTFT run with max_tokens=8 always reports WRONG even though the model is
+    perfectly healthy. Raising max_tokens on every timed rep instead would
+    add a minute of pointless generation to each one.
+
+    So: correctness gets a short prompt and a generous budget, timing gets a
+    long prompt and a tiny budget. Neither compromises the other.
+
+    Returns (ok, detail).
+    """
+    prompt = "Reply with exactly one word: ACKNOWLEDGED"
+    try:
+        r = stream_request(url, model, prompt, 2048, timeout)
+    except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
+        return False, f"probe request failed: {exc}"
+    # Search the whole stream, including past a </think> block.
+    ok = "ACKNOWLEDGED" in r["text"].upper()
+    return ok, r["text"][-120:]
+
+
 def run_workload(args):
     reps = args.reps
     target = args.prompt_tokens
@@ -235,12 +271,19 @@ def run_workload(args):
         # llama.cpp's prefill-only prompt_ms.
         n = r.get("actual_prompt_tokens") or target
         r["implied_prefill_tps"] = n / r["ttft_s"] if r["ttft_s"] > 0 else None
-        r["correct"] = "ACKNOWLEDGED" in r["text"].upper()
+        # A decode rate computed over a handful of intervals is noise, not a
+        # measurement: cold16k generates 8 tokens, so the "rate" is dominated
+        # by scheduler jitter on the first few steps. Only the longctx
+        # workload generates enough to characterise sustained decode.
+        if r["stream_tokens"] < MIN_TOKENS_FOR_DECODE_RATE:
+            r["decode_tps"] = None
+            r["decode_tps_note"] = (
+                f"suppressed: only {r['stream_tokens']} tokens generated, "
+                f"need >={MIN_TOKENS_FOR_DECODE_RATE} for a meaningful rate")
         records.append(r)
+        dec = f"{r['decode_tps']:.1f}" if r["decode_tps"] else "n/a"
         print(f"  rep {i}: ttft={r['ttft_s']:.3f}s  "
-              f"prompt_tok={n}  decode_tps="
-              f"{r['decode_tps'] if r['decode_tps'] else float('nan'):.1f}  "
-              f"{'OK' if r['correct'] else 'WRONG:' + r['text'][:40]}")
+              f"prompt_tok={n}  gen={r['stream_tokens']}  decode_tps={dec}")
 
     ttfts = [r["ttft_s"] for r in records]
     if args.verify_cold and len(ttfts) > 1:
@@ -289,6 +332,14 @@ def main():
     print(f"  target prompt tokens: {args.prompt_tokens}, max_tokens {args.max_tokens}")
 
     vram_before = read_vram(args.vram_cmd)
+
+    # Prove the model works before spending time timing it. A backend that is
+    # fast because it is computing garbage must be reported as broken, not as
+    # a result -- this repo has published fallback-path numbers as real ones
+    # before (docs 16 and 17) precisely because nothing checked.
+    probe_ok, probe_detail = probe_correctness(args.url, args.model, args.timeout)
+    print(f"  correctness probe: {'PASS' if probe_ok else 'FAIL'}  ({probe_detail!r})")
+
     records = run_workload(args)
     vram_after = read_vram(args.vram_cmd)
 
@@ -312,7 +363,8 @@ def main():
         "implied_prefill_tps_median": statistics.median(
             [r["implied_prefill_tps"] for r in records if r["implied_prefill_tps"]]),
         "decode_tps_median": statistics.median(decs) if decs else None,
-        "all_correct": all(r["correct"] for r in records),
+        "correctness_probe_pass": probe_ok,
+        "correctness_probe_detail": probe_detail,
         "reps": len(records),
         "vram_before": vram_before,
         "vram_after": vram_after,
@@ -330,11 +382,11 @@ def main():
         print(f"  decode t/s    : {summary['decode_tps_median']:.1f}")
     if vram_after:
         print(f"  VRAM total    : {vram_after['total_gb']} GB")
-    if not summary["all_correct"]:
-        print("  !! at least one rep failed the correctness check -- "
-              "do not quote these numbers")
+    if not probe_ok:
+        print("  !! correctness probe FAILED -- this backend is producing "
+              "wrong output; do not quote its throughput")
     print(f"  wrote {args.out}")
-    return 0 if summary["all_correct"] else 1
+    return 0 if probe_ok else 1
 
 
 if __name__ == "__main__":

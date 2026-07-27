@@ -62,7 +62,15 @@ docker run -d --name "$NAME" \
   "$IMAGE" serve "${MODEL_DIR/#$HOST_MODELS//models}" \
     --served-model-name bench \
     --host 0.0.0.0 --port 8000 \
-    --tensor-parallel-size 2 \
+    --tensor-parallel-size "${TP:-2}" \
+    `# TP is a large hidden cost for MoE models, not just a memory decision.` \
+    `# vLLM's per-expert loader (fused_moe/layer.py _load_w13) narrows the` \
+    `# checkpoint tensor per TP rank, producing a NON-CONTIGUOUS view, and` \
+    `# then does expert_data.copy_(loaded_weight) once per expert per layer.` \
+    `# On Qwen3-30B-A3B (128 experts x 48 layers) that measured ~697 s PER` \
+    `# SHARD at TP=2 -- a ~3 hour load for a 61 GB model -- while the same` \
+    `# file reads at 3.0 GB/s, so it is pure CPU, not I/O. Prefer TP=1` \
+    `# whenever the weights fit on one card. Override with TP=1 in the env.` \
     --gpu-memory-utilization 0.90 \
     --no-enable-prefix-caching \
     --seed 1234 \

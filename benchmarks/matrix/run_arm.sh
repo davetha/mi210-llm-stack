@@ -99,6 +99,45 @@ for wl in cold16k longctx; do
 done
 
 docker logs "$NAME" > "$LOGS/$LABEL.serverlog" 2>&1 || true
+
+# Harvest the engine's own footprint accounting before tearing the container
+# down. Sampling rocm-smi does NOT give model size: vLLM preallocates KV cache
+# to --gpu-memory-utilization, so a 16 GB model and a 60 GB model both report
+# ~90% of the card. The deliverable needs weights-vs-KV separated, and only the
+# engine knows the split.
+python3 - "$LOGS/$LABEL.serverlog" "$RESULTS" "$LABEL" <<'PY' || true
+import json, os, re, sys, glob
+logfile, results, label = sys.argv[1:4]
+try:
+    text = open(logfile, errors="replace").read()
+except OSError:
+    sys.exit(0)
+pats = {
+    "weights_gib":  r"Model loading took ([\d.]+) GiB",
+    "load_seconds": r"Model loading took [\d.]+ GiB memory and ([\d.]+) seconds",
+    "kv_cache_gib": r"Available KV cache memory: ([\d.]+) GiB",
+    "kv_cache_tokens": r"GPU KV cache size: ([\d,]+) tokens",
+    "graph_capture_gib": r"Graph capturing finished in \d+ secs, took ([\d.]+) GiB",
+}
+found = {}
+for key, pat in pats.items():
+    m = re.search(pat, text)
+    if m:
+        found[key] = float(m.group(1).replace(",", ""))
+if not found:
+    sys.exit(0)
+for path in glob.glob(os.path.join(results, label + "-*.json")):
+    try:
+        with open(path) as fh:
+            doc = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        continue
+    doc["engine_footprint"] = found
+    with open(path, "w") as fh:
+        json.dump(doc, fh, indent=2)
+    print(f"  footprint merged into {os.path.basename(path)}: {found}")
+PY
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 echo "ARM $LABEL done (rc=$rc)"
 exit $rc
