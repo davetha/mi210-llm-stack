@@ -80,10 +80,48 @@ Nothing in that line says AITER was considered and rejected. Setting
 `on_mi3xx()` in `AiterFlashAttentionBackend.supports_compute_capability()`
 rejects the backend again even if the first gate is widened.
 
-`configs/enable_vllm_aiter_gfx90a.py` changes both to `on_gfx9()` — the
-condition the surrounding documentation already claims. It deliberately leaves
-the other two `on_mi3xx()` sites alone, since those guard FP8 scaled-GEMM paths
-that CDNA2 genuinely cannot execute.
+`configs/enable_vllm_aiter_gfx90a.py` opens this up for **attention only**. It
+adds an attention-specific `is_aiter_attention_supported()`, keyed on
+`on_gfx9()` — the condition the surrounding documentation already claims — and
+re-decorates exactly two checks with it: `is_mha_enabled` (which puts
+`ROCM_AITER_FA` back in the candidate list) and `is_shuffle_kv_cache_enabled`
+(which routes decode to `pa_fwd_asm`, and is read only by `rocm_aiter_fa.py`).
+The `supports_compute_capability` site above becomes `on_gfx9()` too.
+
+**The master `is_aiter_found_and_supported()` is deliberately left on
+`on_mi3xx()`.** Widening it instead — which an earlier draft of this work did —
+also admits gfx90a to every other AITER op, including
+`AiterFp8BlockScaledMMKernel`, an FP8 GEMM on a chip with no FP8 ALU. Pinning
+`VLLM_ROCM_USE_AITER_LINEAR=0` hides that, but "it is gated off elsewhere" is
+not a safety property: the other gate can be removed later. That is the defect
+class PR #8 closed, so it is not reintroduced here.
+
+Measured after the narrow patch, with `VLLM_ROCM_USE_AITER_LINEAR=1` set
+explicitly to prove the point:
+
+```
+master  is_aiter_found_and_supported : False
+attn    is_aiter_attention_supported : True
+is_mha_enabled                       : True
+is_shuffle_kv_cache_enabled          : True
+is_enabled / is_linear_enabled / is_linear_fp8_enabled : None
+AiterFp8BlockScaledMMKernel.is_supported(90)  -> (None, 'Only supported on ROCm ... with aiter')
+TritonFp8BlockScaledMMKernel.is_supported(90) -> (True, None)
+```
+
+The price is AITER's INT8 and bf16 linear paths, which stay unreachable on
+gfx90a. No measurement here shows they help, and the 1.23x below came entirely
+from attention. Serving throughput is byte-for-byte unaffected by the
+narrowing — the full sweep was re-run and matched to within the noise floor
+(80.0 vs 79.9 output tok/s at 4096 tokens / concurrency 32).
+
+One consequence worth knowing: with the master gate closed,
+`rocm_aiter_ops.is_enabled()` stays falsy on gfx90a, which disables
+`fused_rope_kvcache_supported()` — an optional rope + KV-cache fusion inside the
+FA backend. That fusion is already unavailable whenever the shuffled KV layout
+is on, so the ASM configuration is unaffected. `flash_attn_varlen_func`,
+`triton_rope_and_cache` and `paged_attention_common` are undecorated static
+methods and work regardless.
 
 **This corrects a premise this work started from.** The expectation was that
 vLLM's AITER gates were already `is_on_gfx9()` and no vLLM patching would be
@@ -92,13 +130,18 @@ docstring quoted above, not in executable code.
 
 ### Selecting the backend is a second, separate step
 
-Widening the gate makes `ROCM_AITER_FA` *selectable*, not *selected*. vLLM's
+Opening the gate makes `ROCM_AITER_FA` *selectable*, not *selected*. vLLM's
 ROCm priority list puts `ROCM_ATTN` first, so the default still avoids AITER:
 
 ```
 Overriding with ROCM_ATTN out of potential backends:
-    ['ROCM_ATTN', 'ROCM_AITER_FA', 'ROCM_AITER_UNIFIED_ATTN', 'TRITON_ATTN']
+    ['ROCM_ATTN', 'ROCM_AITER_FA', 'TRITON_ATTN']
 ```
+
+(`ROCM_AITER_UNIFIED_ATTN` is *not* in that list, because its gate is the
+untouched master check rather than `is_mha_enabled`. That backend is a Triton
+kernel, not the ASM path, and is not wanted here — but it is a good marker that
+the narrowing did what it claims.)
 
 `ROCM_ATTN` reaches no AITER code at all — its prefill is a Triton kernel and
 its decode is vLLM's own paged attention. Two further points cost real time
@@ -411,28 +454,41 @@ kernel tuning. If someone tuned the Triton block-FP8 config for gfx90a — the
 warning names the exact missing file — this could plausibly become viable, and
 the memory-saving prize is real: 1.75x on weights and 1.40x more KV cache.
 
-### Two related notes
+### A latent bug found on the way, and fixed
 
-**`torch._scaled_mm` is hard-gated below MI300**, verified directly:
+`torch._scaled_mm` is hard-gated below MI300, verified directly on this card:
 
 ```
 RuntimeError: torch._scaled_mm is only supported on CUDA devices with
 compute capability >= 9.0 or 8.9, or ROCm MI300+
 ```
 
-This did not affect the run above, because block-quantized checkpoints route to
-the block-scaled kernels instead. But gfx90a reports compute capability 9.0,
-which *passes* vLLM's `>= 89` check in `TorchFP8ScaledMMLinearKernel`. By code
-reading, a **per-tensor or per-channel** FP8 checkpoint would therefore select
-that kernel and then fail at runtime on this hardware. Not tested end to end —
-no such checkpoint was run — so treat it as a prediction, not a measurement.
+That did not affect the runs above, because block-quantized checkpoints route to
+the block-scaled kernels instead. But **gfx90a reports compute capability 9.0**,
+which *passes* the `>= 89` check in the base `TorchFP8ScaledMMLinearKernel`.
+Measured on the MI210 before any patch:
 
-**`enable_vllm_aiter_gfx90a.py` makes `AiterFp8BlockScaledMMKernel` selectable.**
-It gates on `rocm_aiter_ops.is_linear_enabled()`, which now answers truthfully on
-gfx90a. Every configuration in this document pins `VLLM_ROCM_USE_AITER_LINEAR=0`,
-so it was never selected here — but anyone enabling AITER's linear ops on CDNA2
-with an FP8 model should expect to meet an AITER FP8 GEMM on hardware with no
-FP8 ALU. The patch script documents this.
+```
+PerTensorTorchFP8ScaledMMLinearKernel.is_supported(90)    -> (True, None)
+ChannelWiseTorchFP8ScaledMMLinearKernel.is_supported(90)  -> (True, None)
+RowWiseTorchFP8ScaledMMLinearKernel.is_supported(90)      -> (False, 'requires MI3xx.')
+```
+
+Only the RowWise variant refuses. So a **per-tensor or per-channel** FP8
+checkpoint selects one of the first two, reaches `torch._scaled_mm`, and dies
+inside ATen with an error that explains nothing about the real cause.
+
+This is the rare gate that wants **narrowing**, not widening, so
+`enable_vllm_aiter_gfx90a.py` narrows it: on ROCm below MI3xx the kernel now
+refuses at selection time, naming CDNA2's missing FP8 ALU and pointing at the
+block-quantized alternative. After the patch all four report `False`, while
+`TritonFp8BlockScaledMMKernel` still reports `True` — so block-quantized FP8
+still runs exactly as measured above, re-verified end to end (same 15.71 GiB,
+same Triton kernel selected, coherent output).
+
+No per-tensor FP8 checkpoint was ever run, so the *failure* this prevents
+remains a prediction from code reading plus a direct `_scaled_mm` test. What is
+measured is the gate's before-and-after answer, shown above.
 
 ---
 
