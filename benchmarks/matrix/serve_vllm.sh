@@ -65,8 +65,11 @@ docker run -d --name "$NAME" \
     --tensor-parallel-size 2 \
     --gpu-memory-utilization 0.90 \
     --no-enable-prefix-caching \
-    --disable-log-requests \
     --seed 1234 \
+    `# NO --disable-log-requests: that flag was REMOVED in vLLM 0.23 and` \
+    `# replaced by --enable-log-requests, which defaults to off. Passing the` \
+    `# old name aborts startup with "unrecognized arguments" -- the container` \
+    `# exits immediately and 'docker logs' shows only that one line.` \
     "$@"
 
 echo "started $NAME on :$PORT  (model $MODEL_DIR)"
