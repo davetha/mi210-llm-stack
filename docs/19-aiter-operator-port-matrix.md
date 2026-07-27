@@ -175,6 +175,46 @@ distinguish ASM from the CK fallback — both should be right.
 
 ---
 
+## Manifests must be pruned with the kernels
+
+Removing a non-portable `.co` is only half the job. Each kernel family carries a
+`.csv` manifest that `hsa/codegen.py` turns into the config table the dispatcher
+selects from **by shape** — and that selection never checks whether the file
+exists. The loader then hard-fails:
+
+```c
+AITER_CHECK(file.is_open(), "failed to open ", full_path.c_str());
+```
+— `aiter_meta/csrc/include/aiter_hip_common.h:394`
+
+So a manifest that outlives its kernels converts an unsupported shape from a
+graceful fallback into a crash. After the first pass of pruning, **754 manifest
+rows pointed at kernels that no longer existed** — 47 of the 55 `pa` rows among
+them.
+
+Nothing reachable actually broke, because every dangling `pa` row is a quantised
+variant that a bf16/fp16 workload cannot select, and `fmoe`'s ASM path is
+unreachable on gfx90a anyway. But that is precisely the "it is gated off, so it
+is harmless" reasoning that [doc 18](18-pa-fwd-asm-resolved.md) used about
+`fmha_v3_fwd` — and which this work then invalidated by opening the gate. Do not
+lean on it twice.
+
+`repatch_gfx942_to_gfx90a.py` therefore prunes manifests in a second pass, after
+it knows which kernels it produced, so the generated tree is self-consistent **by
+construction**:
+
+```
+TALLY: {'OK': 242, 'NOTPORT': 1180}
+manifests: 207 rows kept, 754 dangling rows dropped
+```
+
+Note `co_name` is relative to the manifest's own directory, except for fmha,
+where the dispatcher inserts an `MI300/` or `MI308/` product subdirectory at load
+time — a row is only dangling if none of those resolve.
+
+Because the config table is generated from these manifests at JIT build time,
+changing them requires rebuilding the affected module.
+
 ## The MFMA wait-state hazard
 
 `V_MFMA_F32_16X16X16*` is a 4-pass instruction on gfx942 but an **8-pass**
