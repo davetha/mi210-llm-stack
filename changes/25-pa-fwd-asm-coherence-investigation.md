@@ -180,6 +180,37 @@ Output:
 
 TTFT=0.527s, TPOT=0.029s. Coherent, contextually appropriate responses.
 
+### Phase 6: Full FP16 Model + FP16 PA Kernel
+
+**Hypothesis**: The FP16 PA kernel (`pa_fp16_noquant_gqa8_1tg_4w.co`) uses F16 MFMA
+(D3CD) natively on gfx942 — the SAME opcode gfx90a supports. No MFMA opcode patch
+needed. If the entire model runs in FP16, the FP16 PA kernel should work correctly.
+
+**Approach**:
+1. Converted Qwen3-0.6B to FP16 via `AutoModelForCausalLM.from_pretrained(torch_dtype=torch.float16)`
+2. Saved to `/models/qwen3-0.6b-fp16`
+3. Added `--dtype float16` to simple_inference.py (sets kv_cache_dtype + torch default dtype)
+4. Ran without `ATOM_USE_UNIFIED_ATTN` to force pa_fwd_asm dispatch
+
+**Result**: Failed with dtype mismatch:
+```
+RuntimeError: expected mat1 and mat2 to have the same dtype, but got: c10::BFloat16 != c10::Half
+```
+
+**Root cause**: ATOM's GEMM pipeline (`aiter/tuned_gemm.py`) hardcodes BF16 output type:
+```
+[aiter] shape is M:16384, N:4096, K:1024 dtype='torch.float16' otype='torch.bfloat16'
+```
+
+The GEMM kernel receives FP16 input but outputs BF16. This creates a dtype cascade:
+1. Embedding layer: FP16 ✅
+2. First GEMM (QKV projection): FP16 input → BF16 output ❌
+3. Next layer: BF16 input vs FP16 weight → dtype mismatch ❌
+
+**Conclusion**: The entire AITER GEMM pipeline is BF16-optimized. Switching to FP16
+would require patching the GEMM output type, activation functions, attention dispatch,
+and KV cache allocation. This exceeds the scope of binary patching.
+
 ## Future Path to Native pa_fwd_asm on gfx90a
 
 1. **Recompile AITER from source for gfx90a**: AITER's C++/HIP source includes pa_fwd_asm.
