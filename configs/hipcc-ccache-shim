@@ -1,0 +1,15 @@
+#!/bin/sh
+# ccache shim for hipcc.
+#
+# aiter's JIT resolves the compiler to an absolute path (aiter/jit/core.py ->
+# executable_path("hipcc")), so putting ccache earlier in PATH has no effect
+# there. The only way to get ccache into aiter's JIT compiles is to shadow the
+# binary itself: the real compiler is /opt/rocm/bin/hipcc.real.
+#
+# Defaults are overridable from the environment so CMake builds can point at a
+# different cache without editing this file.
+export CCACHE_DIR="${CCACHE_DIR:-/models/ccache-aiter}"
+export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-40G}"
+export CCACHE_DEPEND="${CCACHE_DEPEND:-1}"
+export CCACHE_SLOPPINESS="${CCACHE_SLOPPINESS:-locale,time_macros,include_file_ctime,include_file_mtime}"
+exec ccache /opt/rocm/bin/hipcc.real "$@"
