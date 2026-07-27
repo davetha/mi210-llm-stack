@@ -12,8 +12,19 @@ MI210's matrix cores unused during attention — if ggml's FlashAttention were
 running on plain vector ALUs, turning rocWMMA ON should have been a large
 prefill win.
 
-**It is not a win. rocWMMA makes prefill 18-26% slower, and the reason is that
-attention was already running on the matrix cores the whole time.**
+**That premise is wrong, and it is worth being blunt about why, because "we
+tried it and it was slower" invites someone to retry it with different tuning.
+There is nothing to tune.**
+
+llama.cpp already uses the matrix cores for attention on gfx90a, through its
+`fattn-mma-f16` path. `GGML_HIP_ROCWMMA_FATTN` does not *enable* MFMA. It
+**selects a different kernel** — the older `fattn-wmma-f16` — which emits the
+same `v_mfma_f32_16x16x16f16` instruction with worse blocking. The flag is a
+choice between two MFMA kernels, and rocWMMA picks the worse one. Prefill is
+18-26% slower as a result.
+
+So this question is closed, not merely answered unfavourably. The only thing
+that would reopen it is upstream rewriting `fattn-wmma-f16` itself.
 
 ## The measurement
 
@@ -32,6 +43,18 @@ with unique UUID-seeded prompts so nothing could hit a prefix cache.
 
 rocWMMA is not *broken* here — output is correct. It is simply slower, and the
 penalty grows with context length, which is the opposite of what you want.
+
+The result was reproduced **three times by two people on independent runs**,
+which is why it is stated this firmly:
+
+| run | 16k | 24k |
+|---|---|---|
+| this investigation | −18.3% | −25.7% |
+| second run, separate cards | −19.8% | −26.3% |
+| third run, separate harness | −19.8% | −26.3% |
+
+All arms passed the `ACKNOWLEDGED` check, so no arm was fast because it was
+computing garbage.
 
 Generation is unaffected because decode uses the vector kernel
 (`BEST_FATTN_KERNEL_VEC`), which neither path touches.

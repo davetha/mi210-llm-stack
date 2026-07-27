@@ -26,6 +26,11 @@ gfx90a code object is full of `v_mfma_f32_16x16x16f16`. Turning rocWMMA ON only
 *diverts* attention to the older `fattn-wmma-f16` kernel, which emits the same
 MFMA instruction with worse blocking.
 
+**This is not a tuning problem — do not retry it.** The flag does not turn the
+matrix cores on; it chooses between two kernels that both use them, and picks
+the worse one. Confirmed by three independent benchmark runs and by
+disassembling the shipped library.
+
 **Must build with:** `-DGGML_HIP_ROCWMMA_FATTN=OFF` — but note that setting it
 `ON` against the rocWMMA shipped with ROCm 7.1 (version 2.0.0) does nothing at
 all, because llama.cpp blacklists that exact version on CDNA. See
