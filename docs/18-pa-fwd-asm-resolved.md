@@ -127,6 +127,12 @@ instructions with no gfx90a equivalent:
 
 **fp8/int8 paged attention really is gfx942+ only.**
 
+> **Update:** this taxonomy is incomplete. A full sweep of all 1,422 gfx942
+> kernels found two further blockers not visible in the `pa` family alone:
+> **packed-bf16 atomics** (`global_atomic_pk_add_bf16`, 539 kernels — the second
+> largest blocker overall) and 64-bit VALU ops (3 kernels). See
+> [`19-aiter-operator-port-matrix.md`](19-aiter-operator-port-matrix.md).
+
 Portable set (all verified):
 
 ```
@@ -213,6 +219,14 @@ fmha_v3_fwd/MI300/fwd_hd128_bf16_rtne.co
 mis-patched `fmha_v3_fwd` and `mla` code objects are **never dispatched** — dead files,
 not a live hazard.
 
+> **Update — this is no longer true, and the prediction two sections below came
+> true immediately.** `configs/enable_gfx90a_asm_paths.py` deliberately removes
+> that gate, so `fmha_v3_fwd` **is** now dispatched on gfx90a. It is safe only
+> because the kernel tree was regenerated first (change 29 §2), leaving no
+> mis-patched files to dispatch. Had the gate been opened against the old tree,
+> this reasoning would have failed exactly as warned. Do not rely on "gated off"
+> as a safety property.
+
 That also means doc 17's performance table is misattributed:
 
 | Doc 17 row | Reality |
@@ -285,12 +299,18 @@ python configs/repatch_gfx942_to_gfx90a.py \
 
 Treat `hsa/gfx90a/` as **generated**. Rebuild it with this tool, never by hand.
 
-### Recommended follow-ups
+### Recommended follow-ups — ✅ both done
 
-1. Delete the 1,147 non-portable `.co` files from `hsa/gfx90a/` so kernel selection can
-   never pick an unrunnable kernel.
-2. Reinstall the 74 mis-patched ones from the repatcher — harmless today because they are
-   gated off, but wrong on disk and a trap if a future aiter drops the gate.
+1. ~~Delete the 1,147 non-portable `.co` files from `hsa/gfx90a/` so kernel selection can
+   never pick an unrunnable kernel.~~
+2. ~~Reinstall the 74 mis-patched ones from the repatcher — harmless today because they are
+   gated off, but wrong on disk and a trap if a future aiter drops the gate.~~
+
+Both were completed in change 29 §2: `hsa/gfx90a/` was regenerated wholesale
+from the repatcher, leaving exactly the 242 portable kernels. The trap named in
+item 2 was real — the gate was dropped days later by
+`configs/enable_gfx90a_asm_paths.py`, and only the prior regeneration made that
+safe.
 
 ---
 

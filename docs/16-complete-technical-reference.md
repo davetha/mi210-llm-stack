@@ -1,5 +1,18 @@
 # MI210 AITER ASM + ATOM Integration: Complete Technical Reference
 
+> ⚠️ **PARTLY SUPERSEDED — do not run the patch recipe in section 8.**
+> This document's binary-patch method is **wrong** and reproduces a bug that
+> silently corrupts results. Specifically: the `D3E1 → D3CD` substitution
+> (bf16 MFMA → f16 MFMA) is incorrect — gfx90a *does* have BF16 MFMA
+> (`v_mfma_f32_16x16x16bf16_1k`, opcode D3E7) — and the `vgpr_count` rewrite is
+> unnecessary, because gfx90a has a unified VGPR/AGPR register file.
+>
+> The correct pipeline is in
+> [`19-aiter-operator-port-matrix.md`](19-aiter-operator-port-matrix.md).
+> Sections 1-7 (hardware, install, ATOM integration) remain broadly accurate;
+> the ASM-portability claims in sections 3, 5 and 8 do not. Per-claim
+> corrections are marked inline below.
+
 **Last updated**: 2026-07-27
 **Hardware**: 2× AMD Instinct MI210 (gfx90a / CDNA2, 64 GB HBM2e each, PCIe Gen4 x16)
 **Software**: ROCm 7.14.0, AITER 0.1.17, ATOM v0.1.5, PyTorch 2.11+rocm7.14, Python 3.14
@@ -27,19 +40,28 @@ We binary-patched AMD's AITER ASM kernels from gfx942 (MI300X) to gfx90a (MI210)
 enabling ASM-optimized inference operators on hardware that AMD never officially
 supported. Key achievements:
 
-| Achievement | Detail |
-|-------------|--------|
-| **1,251 .co files patched** | All ASM operators in gfx942 → gfx90a |
-| **MLA prefill: 3M tok/s** | 3,013,378 tok/s at S=512 |
-| **MLA decode: 0.090ms** | 3× faster than Triton |
-| **ATOM inference works** | Qwen3-0.6B generates coherent text at 34.5 tok/s |
-| **ROCm 7.14.0** | Latest, with HSA Runtime 1.21 |
+| Achievement | Detail | Status |
+|-------------|--------|--------|
+| **1,251 .co files patched** | All ASM operators in gfx942 → gfx90a | ❌ **Wrong.** Only **242 of 1,422** are portable; 1,147 of the installed files could not execute and have been removed. |
+| **MLA prefill: 3M tok/s** | 3,013,378 tok/s at S=512 | ⚠️ **Mis-attributed.** `mla.py` gates ASM to gfx942/gfx950, so this measured the Triton/CK fallback. |
+| **MLA decode: 0.090ms** | 3× faster than Triton | ⚠️ Same mis-attribution — "3× faster than Triton" is self-refuting if both sides were Triton. |
+| **ATOM inference works** | Qwen3-0.6B coherent at 34.5 tok/s | ✅ Throughput real; the "ASM prefill" attribution was not. |
+| **BF16 GEMM: 60.1 TFLOPS** | M=N=K=2048 | ⚠️ **Unverified.** All 22 `bf16gemm` ASM kernels are non-portable (packed-bf16 atomics), so this cannot have been ASM. Needs re-measurement. |
+| **topk_softmax: 0.73 ms** | E=256, K=8 | ✅ Plausibly genuine — all 22 `topksoftmax` kernels are portable. |
+| **ROCm 7.14.0** | Latest, with HSA Runtime 1.21 | ✅ |
 
-**What works**: ASM MLA attention, topk_softmax, BF16 GEMM, flash attention prefill,
-ATOM end-to-end inference (hybrid ASM prefill + Triton decode).
+**What actually works in ASM on gfx90a** (validated numerically, ASM load
+confirmed): paged-attention decode `pa_fwd_asm` (48/48) and flash-attention
+forward `fmha_v3_fwd` (80/80, batched and varlen).
 
-**What's blocked**: ASM paged attention decode (pa_fwd_asm) through ATOM's default
-dispatch, due to `.view()` stride mismatch in KV cache allocation.
+**What is blocked, and why**: everything requiring FP8, INT8, packed-bf16
+atomics, or 64-bit VALU — 1,180 kernels. These are arithmetic capabilities CDNA2
+does not have, not work outstanding.
+
+**Superseded claim**: this section previously said `pa_fwd_asm` was blocked
+through ATOM by a `.view()` stride mismatch. The real cause was a stale JIT
+module silently discarding every store — see
+[`18-pa-fwd-asm-resolved.md`](18-pa-fwd-asm-resolved.md).
 
 ---
 
@@ -49,13 +71,37 @@ dispatch, due to `.view()` stride mismatch in KV cache allocation.
 
 Applied to every `.co` file in `aiter_meta/hsa/gfx942/`:
 
+> ⚠️ **The table and rationale below are WRONG.** Layers 2 and 3 are both
+> incorrect. Corrected version first; the original is retained beneath it as a
+> record of the mistake.
+
+**Corrected — a 2-layer patch, and it applies to only 242 of 1,422 kernels:**
+
+| Layer | What | Value |
+|-------|------|-------|
+| 1. ELF e_flags | Architecture identification | mach `0x4c` (gfx942) → `0x3f` (gfx90a) |
+| 2. MFMA opcode | Instruction translation | `D3E1` (`v_mfma_f32_16x16x16_bf16`) → **`D3E7`** (`v_mfma_f32_16x16x16bf16_1k`) — bf16 stays bf16 |
+
+There is no third layer. Why the original was wrong:
+
+- **gfx90a HAS BF16 MFMA.** `v_mfma_f32_16x16x16bf16_1k`, opcode D3E7. Swapping
+  to the f16 instruction reinterprets bf16 bit patterns as f16, which corrupts
+  results silently — measured at rel_rms 272 with 0.2% element match on bf16
+  gqa16 paged attention, versus 5.8e-4 and 100% with D3E7.
+- **"Both accumulate to FP32 so results are identical" is a non-sequitur.** The
+  accumulator width is irrelevant when the *inputs* are being misread; bf16 and
+  f16 have different exponent and mantissa widths.
+- **The vgpr_count rewrite is unnecessary.** gfx90a's VGPR/AGPR register file is
+  **unified**, so the descriptor needs no change. The related "0 `v_accvgpr`
+  instructions implies incompatible" argument fails for the same reason.
+
+<details><summary>Original (wrong) 3-layer patch, kept as a record</summary>
+
 | Layer | What | Value |
 |-------|------|-------|
 | 1. ELF e_flags | Architecture identification | mach `0x4c` (gfx942) → `0x3f` (gfx90a) |
 | 2. MFMA opcode | Instruction translation | `D3E1` (v_mfma_f32_16x16x16_bf16) → `D3CD` (v_mfma_f32_16x16x16f16) |
 | 3. vgpr_count | Register file size | 512 → 256 (msgpack uint16: `0xCD 0x02 0x00` → `0xCD 0x01 0x00`) |
-
-### Why This Works
 
 - **gfx90a has `v_mfma_f32_16x16x16f16`** (opcode D3CD) — same 16×16×16 tile as
   gfx942's `v_mfma_f32_16x16x16_bf16` (opcode D3E1), just F16 input instead of BF16
@@ -65,6 +111,8 @@ Applied to every `.co` file in `aiter_meta/hsa/gfx942/`:
 - **Register file: gfx90a has 256 AccVGPRs + 256 VGPRs** = 512 total, matching
   gfx942's vgpr_count=512 (mapped to gfx90a's 256 VGPR + 256 AccVGPR split)
 
+</details>
+
 ### Root-Level .co Files
 
 45 additional `.co` files exist at the gfx942 root (not in subdirectories).
@@ -73,7 +121,7 @@ These are dispatcher kernels loaded by name:
 - `pa_a16w16_b16.co` — Paged attention A16W16
 - `all_reduce.co`, `allreduce_*.co` — Distributed communication
 
-Script: `configs/patch_root_cos.py`
+Script: `configs/attic/patch_root_cos.py` — ⚠️ **quarantined, do not run** (see `configs/attic/README.md`)
 
 ---
 
@@ -87,7 +135,7 @@ Script: `configs/patch_root_cos.py`
 | fmoe | 838 | ~20/kernel | Patched, not tested through ATOM |
 | fmoe_2stages | 186 | 0 (INT8) | Patched |
 | pa | 56 | ~80/kernel | ✅ Standalone, ⚠️ ATOM integration fault |
-| fmha_v3_fwd | 56 | uses 0xD3E0 | Patched (flash attn uses CK backend) |
+| fmha_v3_fwd | 56 | uses 0xD3E0 | ✅ **48 of 56 portable and now WORKING in ASM** (80/80 configs, batched + varlen). The 8 FP8 kernels are not portable. This row previously read "flash attn uses CK backend" — that is no longer true. See docs/19. |
 | topk_per_row | 2 | 0 | Patched |
 | root-level | 45 | varies | Patched |
 | **Total** | **1,251** | **~36k+** | |
@@ -168,12 +216,31 @@ bash rocm-installer-7.14.0-6.run deps=install gfx=gfx90a --nodiskspace rocm
 ln -sf /opt/rocm-7.2.0/core-7.14 /opt/rocm  # co-install quirk
 
 # Apply binary patches
+#
+# ⚠️ The recipe that stood here applied a KNOWN-WRONG patch (D3E1 -> D3CD plus a
+# vgpr_count rewrite) to all 1,251 .co files. It is removed rather than left
+# runnable: it corrupts bf16 results and re-installs 1,147 kernels that cannot
+# execute on CDNA2. It also could not run as written -- patch_root_cos.py
+# imports patch_category from /tmp.
+#
+# The correct pipeline, from docs/19-aiter-operator-port-matrix.md:
 git clone https://github.com/davetha/mi210-llm-stack.git /tmp/mi210-llm-stack
 cd /tmp/mi210-llm-stack
-for cat in mla topksoftmax topk_per_row_decode topk_per_row_prefill fmoe_2stages fmoe pa fmha_v3_fwd bf16gemm; do
-  python configs/patch_category.py $cat
-done
-python configs/patch_root_cos.py
+SITE=/opt/python/lib/python3.14/site-packages
+
+# 1. Generate the portable kernel set (242 of 1,422 -- the rest need FP8/INT8/
+#    bf16-atomic hardware CDNA2 does not have). ~60 s.
+python configs/repatch_gfx942_to_gfx90a.py $SITE/aiter_meta/hsa/gfx942 ./port_v2
+
+# 2. Install it. hsa/gfx90a is GENERATED -- never hand-edit it.
+cp -a $SITE/aiter_meta/hsa/gfx90a $SITE/aiter_meta/hsa/gfx90a.bak
+rm -rf $SITE/aiter_meta/hsa/gfx90a && cp -a ./port_v2 $SITE/aiter_meta/hsa/gfx90a
+
+# 3. Open the ASM arch gates (flash attention), then force affected JIT modules
+#    to rebuild -- a stale module is how pa_fwd_asm appeared broken for weeks.
+python configs/enable_gfx90a_asm_paths.py
+rm -f  $SITE/aiter/jit/module_fmha_v3_fwd.so
+rm -rf $SITE/aiter/jit/build/module_fmha_v3_fwd
 
 # Create sitecustomize.py (Triton pre-import to avoid LLVM crash)
 echo 'import triton' > /opt/python/lib/python3.14/site-packages/sitecustomize.py
@@ -407,9 +474,9 @@ apt install -y gdb
 
 | Script | Purpose |
 |--------|---------|
-| `configs/patch_category.py` | Generalized recursive category patcher (all 9 categories) |
-| `configs/patch_root_cos.py` | Root-level .co file patcher (45 dispatcher kernels) |
-| `configs/patch_all_mla.py` | Original MLA-specific patcher (22 files) |
+| `configs/attic/patch_category.py` ⚠️ | Generalized recursive category patcher (all 9 categories) |
+| `configs/attic/patch_root_cos.py` ⚠️ | Root-level .co file patcher (45 dispatcher kernels) |
+| `configs/attic/patch_all_mla.py` ⚠️ | Original MLA-specific patcher (22 files) |
 | `configs/patch_opus_fp8.py` | opus.hpp FP8 guard patch (no longer needed in 0.1.17) |
 | `configs/test_prefill_mla_gfx90a.py` | MLA prefill test with correct shapes |
 | `configs/test_decode_gfx90a.py` | MLA decode test |
@@ -418,8 +485,11 @@ apt install -y gdb
 | `configs/test_fmoe_pipeline.py` | MoE pipeline test |
 | `configs/trace_pa_fwd.py` | pa_fwd_asm argument tracer |
 | `configs/trace_full_pipeline.py` | Full pipeline tracer |
-| `configs/test_pa_correct_layout.py` | pa_fwd_asm with correct SHUFFLE layout |
-| `configs/test_reproduce.py` | Reproduce ATOM's exact parameters standalone |
+| ~~`configs/test_pa_correct_layout.py`~~ | **Does not exist.** Superseded by [`tests/test_pa_fwd_asm_gfx90a.py`](../tests/test_pa_fwd_asm_gfx90a.py), which covers 48 configs including the SHUFFLE layout. |
+| ~~`configs/test_reproduce.py`~~ | **Does not exist.** |
+| [`configs/repatch_gfx942_to_gfx90a.py`](../configs/repatch_gfx942_to_gfx90a.py) | **Current** — assembler-verified gfx942→gfx90a repatcher |
+| [`configs/classify_gfx942_kernels.py`](../configs/classify_gfx942_kernels.py) | **Current** — classifies every kernel by blocking hardware capability |
+| [`configs/enable_gfx90a_asm_paths.py`](../configs/enable_gfx90a_asm_paths.py) | **Current** — opens the ASM arch gates for gfx90a |
 | `configs/mfma_emulation_proof.cu` | Proof that F16 MFMA compiles on gfx90a |
 | `configs/bf16_f16_benchmark.cu` | BF16→F16 conversion benchmark |
 

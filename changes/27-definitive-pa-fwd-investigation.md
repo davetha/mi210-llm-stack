@@ -1,5 +1,19 @@
 # Definitive pa_fwd_asm Investigation: All Approaches Exhausted
 
+> ⚠️ **SUPERSEDED** — corrected: the verdict line -- note the body correctly discovers D3E7 at :17-29, but the status line still declares the port impossible because the D3E7 test hung for the unrelated stale-JIT reason.
+>
+> gfx942 ASM **does** run on gfx90a. `pa_fwd_asm` passes 48/48 configs and
+> `fmha_v3_fwd` passes 80/80. The original blocker was a stale JIT module
+> whose kernarg layout predated the installed `.co` files, so every store was
+> silently dropped.
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-27
 **Status**: ❌ gfx942 pa_fwd binaries cannot run on gfx90a. Period.
 

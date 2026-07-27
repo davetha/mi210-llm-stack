@@ -1,5 +1,15 @@
 # 🎉 AiterBackend WORKS on MI210
 
+> ⚠️ **SUPERSEDED** — corrected: the 'hybrid ASM prefill' attribution -- no ASM ran.
+>
+> Performance figures attributed to ASM kernels here were **mis-attributed**.
+> `mha.py` and `mla.py` gate their ASM paths on gfx942/gfx950, so on gfx90a
+> these measured the CK or Triton fallback. The throughput is real; the
+> attribution is not.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-27
 **Status**: ✅ End-to-end text generation via ATOM AiterBackend on gfx90a
 

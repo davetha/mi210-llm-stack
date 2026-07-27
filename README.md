@@ -2,9 +2,11 @@
 
 A complete optimization journal for running **large Mixture-of-Experts LLMs** (up to 310B parameters, MiMo-V2.5) on a pair of AMD Instinct MI210 accelerators — the cheapest CDNA2 cards, **PCIe-linked with no xGMI bridge**. This repo is the hub: architecture, deep-dive docs, build guides, and the change log for every patch that shipped. The actual code lives in two companion repos.
 
-> **Major breakthrough (2026-07-26)**: Binary-patched AMD gfx942 MLA ASM kernels to run on gfx90a — achieving **3M tok/s prefill** and **0.090ms decode** (3× faster than Triton). See [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md).
+> ⚠️ **Retracted (2026-07-26)**: an earlier headline here claimed a binary-patched MLA ASM breakthrough at **3M tok/s prefill / 0.090ms decode**. Both numbers were real measurements but **mis-attributed** — `mla.py` gates its ASM paths on gfx942/gfx950, so on gfx90a they were measuring the Triton/CK fallback, not ASM. The patch method described in [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md) is also wrong. See [`docs/19`](docs/19-aiter-operator-port-matrix.md).
 
-> **ATOM integration (2026-07-27)**: 1,251 ASM .co files patched. ATOM framework generates coherent text on MI210 at 34.5 tok/s via hybrid ASM prefill + Triton decode. ROCm 7.14.0, AITER 0.1.17, Python 3.14. See [`docs/16-complete-technical-reference.md`](docs/16-complete-technical-reference.md) for the full technical reference.
+> **ATOM integration (2026-07-27)**: ATOM generates coherent text on MI210 at 34.5 tok/s. The throughput is real; the "hybrid ASM prefill" attribution was not — no ASM ran. Of the 1,251 `.co` files installed at the time, **1,147 could not execute on CDNA2** and have since been removed. See [`docs/16`](docs/16-complete-technical-reference.md), noting its superseded banner.
+
+> **ASM flash attention works (2026-07-27)**: `fmha_v3_fwd` **does** run on gfx90a — 80/80 configs numerically exact, batched and varlen. It was never a hardware limit; six architecture-string comparisons gated it out, one written in a negated form that a grep for the positive form misses. See [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md).
 
 > **ASM paged-attention decode fixed (2026-07-27)**: `pa_fwd_asm` **does** run on gfx90a — 48/48 configs numerically exact vs a PyTorch reference. The earlier "gfx942 binaries can't run on gfx90a" conclusion was wrong: the real blocker was a **stale JIT module** whose kernarg layout predated the installed `.co` files, so the kernel ran at full speed and silently discarded every store. Also audits all 1,251 patched `.co` files. See [`docs/18-pa-fwd-asm-resolved.md`](docs/18-pa-fwd-asm-resolved.md).
 
@@ -121,15 +123,16 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 ### 1. TurboQuant CPU/GPU split
 TurboQuant's **CPU** path is numerically correct (cosine > 0.98). Its **GPU** path is broken on gfx90a (wave64 shuffle/ballot bugs). So instead of fixing the GPU kernels (a multi-kernel port), we added **per-layer KV types** (`-ctk-cpu turbo3 -ctv-cpu turbo3`) to compress *only* the 25 CPU-pinned layers — getting 5× less DDR4 traffic on exactly the layers that are bandwidth-bound, while keeping the GPU layers at full fp16 quality. The GPU TurboQuant bug becomes irrelevant.
 
-### 2. MLA ASM Binary Patch (gfx942 → gfx90a)
-AMD's AITER library ships MLA attention kernels as pre-compiled binary code objects for gfx942 (MI300X) only. We proved that a **3-layer binary patch** (e_flags + MFMA opcode + vgpr_count) makes these kernels run on gfx90a:
+### 2. ASM kernel port (gfx942 → gfx90a)
+AMD's AITER ships its ASM kernels as pre-compiled code objects for gfx942/gfx950 only. **242 of the 1,422 gfx942 kernels are portable to gfx90a**, and that is a hard ceiling — verified three independent ways, with no kernel blocked by a merely cosmetic difference.
 
-- Swapped `v_mfma_f32_16x16x16_bf16` (opcode D3E1, gfx940+) → `v_mfma_f32_16x16x16f16` (opcode D3CD, gfx90a native)
-- Same 16×16×16 tile, same FP32 accumulation, just F16 input instead of BF16
-- AccVGPR operands preserved (gfx90a introduced AccVGPRs)
-- Result: **3M tok/s prefill**, **0.090ms decode** (3× faster than Triton)
+- Swap `v_mfma_f32_16x16x16_bf16` (D3E1) → `v_mfma_f32_16x16x16bf16_1k` (**D3E7**) and rewrite ELF `e_flags`. That is the whole patch.
+- The split is exactly by **data type**: every bf16 attention kernel ports, every FP8/INT8 one does not. CDNA2 has no FP8 ALU, no gfx942-shaped INT8 MFMA, and no packed-bf16 atomic — so the 1,180 blocked kernels are arithmetic this hardware cannot do, not effort not yet spent.
+- Result: ASM paged-attention decode (48/48) and ASM flash attention (80/80) numerically exact.
 
-See [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md) for the complete documentation.
+An earlier version of this section described a "3-layer patch" swapping D3E1 → **D3CD** (bf16 → f16) plus a `vgpr_count` rewrite. **Both were wrong.** gfx90a has BF16 MFMA, and its VGPR/AGPR file is unified so the register-count rewrite was unnecessary. Scripts implementing that patch are quarantined in [`configs/attic/`](configs/attic/).
+
+See [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md) for the full matrix and reproduction steps.
 
 ## License
 

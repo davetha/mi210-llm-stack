@@ -1,5 +1,23 @@
 # Kitchen Sink Results: AITER Operations on MI210 (gfx90a)
 
+> ⚠️ **SUPERSEDED** — corrected: the 'zero HSA code objects' and 'D3E1 gfx940+ only' claims, the accvgpr rewrite plan, and the MLA figures.
+>
+> The `D3E1 -> D3CD` substitution (bf16 MFMA -> f16 MFMA) is **wrong**: gfx90a
+> has BF16 MFMA (`v_mfma_f32_16x16x16bf16_1k`, opcode **D3E7**). The
+> `vgpr_count` rewrite is unnecessary -- gfx90a's VGPR/AGPR file is unified.
+> Scripts implementing that patch are quarantined in `configs/attic/`.
+> gfx942 ASM **does** run on gfx90a. `pa_fwd_asm` passes 48/48 configs and
+> `fmha_v3_fwd` passes 80/80. The original blocker was a stale JIT module
+> whose kernarg layout predated the installed `.co` files, so every store was
+> silently dropped.
+> Performance figures attributed to ASM kernels here were **mis-attributed**.
+> `mha.py` and `mla.py` gate their ASM paths on gfx942/gfx950, so on gfx90a
+> these measured the CK or Triton fallback. The throughput is real; the
+> attribution is not.
+>
+> Current status: [`../docs/19-aiter-operator-port-matrix.md`](../docs/19-aiter-operator-port-matrix.md).
+> Kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-25
 **Platform**: AMD Instinct MI210, gfx90a, ROCm 7.14
 **Container**: `fa-build` (PyTorch 2.11+rocm7.14.0, AITER 0.1.13)
