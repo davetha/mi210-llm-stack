@@ -440,6 +440,16 @@ which is precisely why serving TPOT was pinned at ~375 ms.
 
 ### Verdict
 
+> ⚠️ **Superseded (2026-07-27).** The measurements below stand; the *cause* is
+> wrong. It was not the missing tuning config (that was real, and worth ~3x). It
+> was that gfx90a has no FP8 **decoder** instruction, so Triton emulates
+> `e4m3 -> fp16` at ~29 VALU ops per value — 7,106 of the kernel's 11,997
+> instructions are the conversion, against 64 MFMA. A 3-instruction bit
+> reinterpretation, exact on every non-NaN e4m3 byte, takes this run from
+> **2.7 to 28.9 tok/s (10.7x)** and TPOT from 373 ms to 34 ms, making FP8
+> ~0.73x of bf16 rather than 0.07x. See
+> [`docs/21-fp8-block-gemm-gfx90a.md`](../docs/21-fp8-block-gemm-gfx90a.md).
+
 **FP8 weight-only on gfx90a works, keeps its memory saving, and preserves ASM
 attention — but is not usable for serving.** Trading 12 GiB of VRAM for a 12x
 throughput loss is not a trade anyone wants. The blocker is not the hypothesis,

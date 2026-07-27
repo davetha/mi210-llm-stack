@@ -952,3 +952,53 @@ miss a second opcode (`v_mfma_f32_32x32x8_bf16`). Those 74 are inert because
 earlier "ASM flash attention 4.79M tok/s" and "ASM MLA" numbers were the CK/Triton
 fallback, not ASM. `pa_fwd` mattered because it is the one op selected by
 `get_gpu_arch()` directory lookup rather than a Python arch gate.
+
+### FP8 on CDNA2 Was Never a Tuning Problem — It Is a Missing Decoder
+
+`benchmarks/vllm-aiter-asm-gfx90a.md` part 3 found FP8 serving 10–15x slower than
+bf16, read vLLM's "Config file not found at ...AMD_Instinct_MI210..." warning, and
+concluded the blocker was a missing tuning config. That was the wrong inference
+from a real warning.
+
+Disassembling what Triton generates for gfx90a: `_w8a8_triton_block_scaled_mm` is
+11,997 instructions, of which **64 are MFMA** and **7,106 are `v_cmp_ne_u16` /
+`v_cndmask_b32`**. Thousands of branchless selects in a GEMM inner loop are not
+addressing arithmetic — they are the IEEE-correct `e4m3 -> fp16` conversion,
+open-coded one case at a time. gfx942 decodes FP8 with `v_cvt_pk_fp8_f32`; that
+instruction does not assemble for gfx90a, so Triton emulates it.
+
+A kernel that does nothing but convert pins the cost to the format: 117 VALU ops
+to decode 4 e4m3 values, against **11** for e5m2 and 11 for int8. e5m2's exponent
+field is already fp16-shaped so it decodes with a shift; e4m3's 4-bit exponent
+needs re-biasing. AMD's `fnuz` spelling does not help — 118 ops, essentially
+identical.
+
+The conversion is only expensive because it is exact for inputs block-quantized
+weights cannot contain. `h = ((u & 0x80) << 8) | ((u & 0x7f) << 7)` reinterprets
+an e4m3 byte as an fp16 holding exactly `2^-8` times its value — for normals and
+denormals alike — and folding `2^16` into the fp32 accumulator restores it. Three
+instructions instead of ~29, **bit-exact on all 254 non-NaN byte patterns**.
+
+That takes the kernel from 11,997 instructions to 3,954 with the same 64 MFMA,
+and 5.5–6x on the clock before any tuning. Tuning then composes with it.
+
+The surprise at the end: at decode shapes the block-scaled GEMM is
+weight-bandwidth-bound, not arithmetic-bound, and FP8 halves the bytes. So FP8
+does not merely catch up to bf16 there — at M=1 `gate_up_proj` it runs at
+**0.59x of bf16's time**. The "FP8 cannot beat bf16 on CDNA2 because they share
+one 181 TFLOP/s peak" reasoning is right about arithmetic and wrong about decode.
+
+End to end that is worth 8.6-10.7x: `Qwen3-14B-FP8` on one MI210 goes from 2.7 to
+**28.9 tok/s** at 128 tokens / concurrency 1, with TPOT dropping from 373 ms to
+34 ms. FP8 now serves at ~0.73x of bf16 while holding 1.75x less weight memory
+and 1.40x more KV cache. The previous verdict — "not usable for serving" — is
+withdrawn.
+
+Also settled: is AITER's FP8 block GEMM dequant-based or FP8-hardware-dependent?
+**Both, depending on which implementation.** Its CK kernel selects
+`mfma_f32_16x16x32f8f8` for `f8_t` operands with no CDNA2 case in the `#if` chain,
+and that instruction is rejected by the assembler for gfx90a — genuinely
+hardware-dependent. But `_hip_blockscale_supported()` excludes gfx90a and falls
+back to aiter's *Triton* kernel, which is dequant-based and runs fine. So opening
+the gate PR #12 closed would route to Triton, not to ASM. See
+`docs/21-fp8-block-gemm-gfx90a.md`.
