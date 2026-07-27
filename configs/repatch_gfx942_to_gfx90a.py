@@ -25,7 +25,7 @@ generated -- rebuild it with this tool, never by hand.
 Result as of 2026-07-27 (aiter 0.1.17): {'OK': 242, 'NOTPORT': 1180}.
 See docs/18-pa-fwd-asm-resolved.md.
 """
-import os, re, sys, struct, subprocess
+import csv, os, re, shutil, sys, struct, subprocess
 
 MC = "/opt/rocm/llvm/bin/llvm-mc"
 OBJDUMP = "/opt/rocm/llvm/bin/llvm-objdump"
@@ -137,10 +137,56 @@ def convert(src, dst):
     return "OK", f"{npatch} MFMA patched, e_flags {flags:#x}->{(flags & ~0xFF) | GFX90A:#x}"
 
 
+def prune_csv(src, dst, produced, dst_root):
+    """Copy a kernel manifest, dropping rows whose .co was not produced.
+
+    The loader hard-fails on a missing code object --
+    `AITER_CHECK(file.is_open(), "failed to open ", ...)` in
+    aiter_hip_common.h -- and kernel selection picks by shape from the
+    CSV-derived config table WITHOUT checking the file exists. So a manifest
+    that outlives its kernels turns an unsupported shape into a crash instead
+    of a fallback. Keeping the manifest in step with the blobs is what makes
+    the generated tree self-consistent; do not rely on some other arch gate
+    happening to keep the dangling row unreachable.
+
+    `co_name` is relative to the manifest's directory, except for fmha, where
+    the dispatcher inserts an `MI300/` or `MI308/` product subdirectory at
+    load time -- so check those too before calling a row dangling.
+    """
+    with open(src, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        shutil.copyfile(src, dst)
+        return 0, 0
+    col = next((c for c in rows[0] if c and "co_name" in c), None)
+    if col is None:
+        shutil.copyfile(src, dst)
+        return 0, 0
+
+    reldir = os.path.dirname(os.path.relpath(dst, dst_root))
+    keep = []
+    for row in rows:
+        co = (row.get(col) or "").strip()
+        cands = [os.path.join(reldir, co)]
+        cands += [os.path.join(reldir, p, co) for p in ("MI300", "MI308")]
+        if any(os.path.normpath(c) in produced for c in cands):
+            keep.append(row)
+
+    with open(dst, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(keep)
+    return len(rows) - len(keep), len(rows)
+
+
 if __name__ == "__main__":
     src_root, dst_root = sys.argv[1], sys.argv[2]
     only = sys.argv[3] if len(sys.argv) > 3 else ""
     tally = {}
+    produced = set()
+    deferred = []
+
+    # Pass 1: convert code objects, recording which ones were actually written.
     for dirpath, _, files in os.walk(src_root):
         for fn in sorted(files):
             rel = os.path.relpath(os.path.join(dirpath, fn), src_root)
@@ -151,10 +197,27 @@ if __name__ == "__main__":
             os.makedirs(os.path.dirname(d), exist_ok=True)
             if not fn.endswith(".co"):
                 if os.path.isfile(s):
-                    open(d, "wb").write(open(s, "rb").read())
+                    deferred.append((s, d))
                 continue
             st, detail = convert(s, d)
             tally[st] = tally.get(st, 0) + 1
-            if st != "OK":
+            if st == "OK":
+                produced.add(os.path.normpath(rel))
+            else:
                 print(f"  {st:8s} {rel}: {detail}")
+
+    # Pass 2: manifests, now that we know which kernels exist.
+    dropped = kept_total = 0
+    for s, d in deferred:
+        if s.endswith(".csv"):
+            n_drop, n_rows = prune_csv(s, d, produced, dst_root)
+            dropped += n_drop
+            kept_total += n_rows - n_drop
+            if n_drop:
+                print(f"  PRUNED   {os.path.relpath(d, dst_root)}: "
+                      f"dropped {n_drop} of {n_rows} rows (kernel not portable)")
+        else:
+            shutil.copyfile(s, d)
+
     print("\nTALLY:", tally)
+    print(f"manifests: {kept_total} rows kept, {dropped} dangling rows dropped")
