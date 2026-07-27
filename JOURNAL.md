@@ -872,3 +872,42 @@ failed due to different tensor shapes between V2 Lite and V3 formats.
 - `changes/18-atom-inference-milestone.md` — Model loading milestone
 - `changes/19-atom-inference-working.md` — Inference working milestone
 - `docs/15-atom-integration.md` — ATOM install and compat guide
+
+## ROCm 7.14 + reshape_and_cache Root Cause + Final Documentation (2026-07-27)
+
+### ROCm 7.14.0 Installation
+
+User corrected: ROCm 7.14 IS the latest release (not 7.2). Installed via
+runfile installer. HSA Runtime: 1.18 → 1.21. PyTorch's "7.14" version
+string refers to the HIP API version, which is a separate numbering track
+from the ROCm platform release version.
+
+### reshape_and_cache Root Cause
+
+The `reshape_and_cache` kernel fault was caused by int32 slot_mapping in
+standalone tests. The kernel template uses `slot_mapping_t = int64_t`,
+so `reinterpret_cast<int64_t*>` on int32 data reads garbage indices.
+ATOM already uses int64 slot_mapping correctly.
+
+### Full Standalone Pipeline Proven
+
+reshape_and_cache(int64) → pa_fwd_asm: FULL PIPELINE WORKS.
+100% nonzero output, zero faults. Binary patches confirmed correct.
+
+### pa_fwd_asm Through ATOM: .view() Mismatch
+
+ATOM allocates KV cache as contiguous NHD tensor, then .view()s to SHUFFLE
+shape. The .view() changes strides without moving data. pa_fwd_asm reads
+with SHUFFLE strides but physical data is in NHD order → fault.
+
+### Working Production Configuration
+
+Hybrid dispatch: ASM flash attention prefill + unified_attention decode.
+Qwen3-0.6B on ROCm 7.14: TTFT=0.587s, TPOT=0.029s (34.5 tok/s).
+
+### Complete Technical Reference
+
+See docs/16-complete-technical-reference.md for the full 9-section reference:
+executive summary, patch recipe, operator inventory, validated operators,
+ATOM integration guide, known issues, working configurations, infrastructure
+setup, and patch scripts reference.

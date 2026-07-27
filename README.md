@@ -4,6 +4,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **Major breakthrough (2026-07-26)**: Binary-patched AMD gfx942 MLA ASM kernels to run on gfx90a — achieving **3M tok/s prefill** and **0.090ms decode** (3× faster than Triton). See [`docs/14-mla-asm-binary-patch.md`](docs/14-mla-asm-binary-patch.md).
 
+> **ATOM integration (2026-07-27)**: 1,251 ASM .co files patched. ATOM framework generates coherent text on MI210 at 34.5 tok/s via hybrid ASM prefill + Triton decode. ROCm 7.14.0, AITER 0.1.17, Python 3.14. See [`docs/16-complete-technical-reference.md`](docs/16-complete-technical-reference.md) for the full technical reference.
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---
