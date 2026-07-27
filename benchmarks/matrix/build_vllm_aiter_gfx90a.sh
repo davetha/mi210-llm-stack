@@ -76,7 +76,23 @@ docker exec "$BUILDER" bash -lc "
   cd /src/aiter
   python3 -m pip uninstall -y amd-aiter aiter 2>/dev/null || true
   python3 -m pip install --no-build-isolation . 2>&1 | tail -15
+
+  # Installing aiter drags triton DOWN from the 3.7.1 the image ships to
+  # 3.7.0, and 3.7.0 SEGFAULTS on import against this image's torch --
+  # 'import aiter' dies with SIGSEGV inside triton/knobs.py loading a native
+  # module. amd-aiter does not even declare triton as a dependency
+  # (einops, flydsl, ninja, packaging, pandas, psutil, pybind11), so this is
+  # a transitive downgrade, not an intentional pin. Restore it explicitly.
+  # Confirmed: with 3.7.1 back, 'import aiter' succeeds and JIT-builds
+  # module_aiter_core normally.
+  python3 -m pip install --quiet 'triton==3.7.1'
+  python3 -c 'import triton; assert triton.__version__ == \"3.7.1\", triton.__version__'
 "
+
+# Import aiter for real before going further. A broken aiter does not fail the
+# later steps -- they are file edits and would all 'succeed' -- it fails at
+# serve time, hours later, looking like a model problem.
+docker exec "$BUILDER" python3 -c "import aiter; print('aiter imports OK')" 2>&1 | tail -2
 docker exec "$BUILDER" python3 -c "
 import aiter, os
 print('aiter at', os.path.dirname(aiter.__file__))
