@@ -62,10 +62,18 @@ every byte a block-quantized checkpoint can contain, makes the same kernel
    decode fix *untuned* already beats the fully tuned stock kernel; together
    they reach 0.59-1.78x of bf16.
 
-7. **In serving this is worth 8.6-10.7x.** `Qwen/Qwen3-14B-FP8` on one MI210
-   goes from 2.7 to **28.9 tok/s** at 128 tokens / concurrency 1, and TPOT from
-   373 ms to 34 ms. FP8 now serves at ~0.73x of bf16 throughput while using
-   1.75x less weight memory — where it was 0.07x before.
+7. **In serving this is worth 8.6-10.8x.** `Qwen/Qwen3-14B-FP8` on one MI210
+   goes from 2.7 to **29.2 tok/s** at 128 tokens / concurrency 1, and TPOT from
+   373 ms to 33.7 ms. Across the full 128/4096 x 1/8/32 grid FP8 now serves at
+   **0.67-0.85x of bf16** while using 1.75x less weight memory and fitting 1.45x
+   more KV — where it was 0.07x before.
+
+9. **CK is not an alternative.** Its block-scaled FP8 GEMM *does* build for
+   gfx90a (315 s) and is dequant-based — 12,288 `v_mfma_f32_16x16x4f32`, zero
+   FP8 opcodes — but it computes **exactly one quarter** of the correct sum,
+   plus NaNs, because its non-gfx94 fallback feeds one scalar per lane to a K=4
+   matrix instruction. Even repaired it would run on **fp32** MFMA at ~45
+   TFLOP/s against the 181 Triton reaches via fp16.
 
 8. **At decode, FP8 is faster than bf16**, which the shared-181-TFLOP/s argument
    does not predict: decode is bound by streaming weights, not by arithmetic,
@@ -127,28 +135,13 @@ Opening the gate PR #12 closed would not expose a hand-written FP8 kernel,
 because none exists for this arch. That is the direct answer to the question
 that motivated the gate.
 
-### The CK kernel behind that gate really does need FP8 hardware
+### What about CK? It builds, and it is broken
 
-The arch list is not conservatism. CK picks its matrix instruction by operand
-type, and for `f8_t` the selection has no CDNA2 case
-(`composable_kernel/include/ck/tensor_operation/gpu/warp/xdlops_gemm.hpp:1576`):
-
-```cpp
-template <>
-constexpr auto GetMfma<f8_t, 16, 16, f8_t, true, false>()
-{
-#if defined(__gfx12__)
-    return MfmaInstr::wmma_f32_16x16x16_f8f8_gfx12;
-#elif defined(__gfx11__)
-    return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-    return MfmaInstr::mfma_f32_16x16x32f8f8;
-#endif
-}
-```
-
-Everything that is not RDNA3/RDNA4 falls through to `mfma_f32_16x16x32f8f8`.
-Asking the assembler directly:
+CK picks its matrix instruction by operand type, and for `f8_t` the selection
+has no CDNA2 case
+(`composable_kernel/include/ck/tensor_operation/gpu/warp/xdlops_gemm.hpp:1576`)
+— everything that is not RDNA3/RDNA4 falls through to
+`mfma_f32_16x16x32f8f8`. The assembler rejects that for gfx90a:
 
 | instruction | gfx90a | gfx942 |
 |---|---|---|
@@ -157,16 +150,78 @@ Asking the assembler directly:
 | `v_cvt_pk_fp8_f32` (the FP8 decoder) | **REJECTED** | OK |
 | `v_mfma_f32_16x16x16f16` (what Triton actually emits) | **OK** | OK |
 
-So the honest answer to "is AITER's FP8 block GEMM dequant-based or
-FP8-hardware-dependent" is **both, depending on which implementation**:
+**That is not the end of it, and an earlier draft of this document was wrong to
+say CK "cannot be built for CDNA2 at all".** The intrinsic is guarded, not
+required (`ck/utility/amd_xdlops.hpp:1442`):
 
-* the **CK and ASM** implementations are genuinely FP8-hardware-dependent and
-  cannot be built for CDNA2 at all;
-* the **Triton** implementation — the only one gfx90a can reach — is
-  dequant-based and runs fine.
+```cpp
+#if defined(__gfx94__)
+    reg_c... = __builtin_amdgcn_mfma_f32_16x16x32_fp8_fp8(...);
+#else
+    vector_type<f8_t, 8> reg_a_v(reg_a);
+    vector_type<f8_t, 8> reg_b_v(reg_b);
+    static_for<0, 8, 1>{}([&](auto k) {
+        float reg_a_f32 = type_convert<float>(reg_a_v.template AsType<f8_t>()[Number<k>{}]);
+        float reg_b_f32 = type_convert<float>(reg_b_v.template AsType<f8_t>()[Number<k>{}]);
+        intrin_mfma_f32_16x16x4f32<16, 16>::Run(reg_a_f32, reg_b_f32, reg_c);
+    });
+#endif
+```
 
-Which is why enabling the AITER kernel on gfx90a is not worth a gate change: it
-would route to Triton, the same class of kernel vLLM already uses.
+So CK has a software fallback for targets with no FP8 MFMA, and it is
+dequant-based like everything else here. Forcing the CK path on gfx90a
+(bypassing `_hip_blockscale_supported`) **builds in 315 s and runs**.
+Disassembling the gfx90a code object out of the module's `.hip_fatbin`:
+
+```
+module_gemm_a8w8_blockscale.so  (gfx90a bundle)   1,266,761 instructions
+    MFMA    : {'v_mfma_f32_16x16x4f32': 12288}
+    FP8/BF8 : NONE
+```
+
+Real matrix instructions, no FP8 opcodes — CK's FP8 GEMM needs no FP8 hardware.
+
+**But it computes the wrong answer.** Against a dequantized reference it returns
+mean relative error 0.750000 at every shape tried, with ~1.7% NaN. The scale
+layout is not the cause: the error is identical with all-ones scales, where
+layout cannot matter, and under all four transpositions of the two scale
+tensors. The number is exact for a reason:
+
+```
+CK vs full K reduction   : 0.750003
+CK vs full/4             : 0.001417      <- bf16 rounding, i.e. equal
+CK vs full/2             : 0.500006
+```
+
+**CK computes exactly one quarter of the correct result.** The fallback feeds a
+single scalar per lane to `intrin_mfma_f32_16x16x4f32`, a K=4 matrix
+instruction, so three of every four K lanes contribute nothing — and the
+uninitialised lanes are where the NaNs come from. This is an upstream CK defect
+on any target without FP8 MFMA, and belongs next to the LLVM register-allocator
+hang the INT8 work found (`docs/20`).
+
+It would not be worth using even if it were correct: `v_mfma_f32_16x16x4f32` is
+**fp32** MFMA, which on CDNA2 runs at ~45 TFLOP/s against 181 for fp16/bf16. CK
+would start a factor of 4 behind Triton on arithmetic alone, while paying the
+same emulated `f8 -> f32` conversions.
+
+> **No CK timings are quoted here, deliberately.** A first pass did time it
+> against Triton and bf16 and produced a plausible-looking table (CK 1.2-2.3x
+> slower than untuned Triton). Those numbers are withdrawn: the correctness gate
+> that should have caught the problem was written `if relerr > 0.02: skip`, and
+> `nan > 0.02` is `False` in Python, so a kernel returning NaN sailed through it
+> and got timed. The gate is now `if not (relerr < 0.02)`. A fast-but-wrong
+> kernel is a wrong kernel.
+
+So the answer to "is AITER's FP8 block GEMM dequant-based or
+FP8-hardware-dependent" is **dequant-based in every implementation that
+compiles** — CK included. The ASM `fp8gemm_blockscale` family is the genuine
+exception: those are prebuilt gfx942 blobs containing FP8 opcodes the assembler
+refuses for gfx90a, and no source fallback applies.
+
+Enabling the AITER kernel on gfx90a is still not worth a gate change: it routes
+to Triton, the same class of kernel vLLM already uses, and the CK alternative
+behind it is broken.
 
 ### It does not need FP8 hardware
 
@@ -340,18 +395,43 @@ Full config sweep (480 configurations: `BLOCK_SIZE_M/N/K`, `GROUP_SIZE_M`,
 reference before being timed, winner re-checked before its number is quoted.
 All times in microseconds on one MI210, Qwen3-14B projection shapes.
 
-| M | layer | bf16 | vLLM stock | vLLM tuned | aiter stock | aiter tuned | fast stock | **fast tuned** | fast tuned / bf16 |
+| M | layer | bf16 | vLLM stock | vLLM tuned | aiter tuned | fast stock | **fast tuned** | fast TFLOP/s | fast tuned / bf16 |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | qkv_proj | 90.7 | 1140.4 | 372.6 | 880.3 | 204.5 | 207.2 | **112.5** | 1.24x |
-| 1 | o_proj | 71.0 | 1136.1 | 211.6 | 865.6 | 165.1 | 204.6 | **78.5** | 1.11x |
-| 1 | gate_up_proj | 451.7 | 3258.6 | 876.7 | 2393.5 | 779.6 | 510.6 | **265.5** | **0.59x** |
-| 1 | down_proj | 228.3 | 3675.7 | 685.9 | 2675.7 | 487.7 | 670.2 | **242.0** | 1.06x |
-| 32 | qkv_proj | 97.3 | 1149.9 | 506.0 | 1040.7 | 295.3 | 191.8 | **151.7** | 1.56x |
-| 32 | o_proj | 77.5 | 1143.4 | 379.0 | 1032.5 | 225.5 | 186.8 | **117.8** | 1.52x |
-| 32 | gate_up_proj | 475.3 | 3284.2 | 1194.6 | 3485.0 | 1107.1 | 506.0 | **363.1** | **0.76x** |
-| 32 | down_proj | 250.4 | 3704.3 | 1116.4 | 3297.1 | 674.5 | 603.9 | **373.0** | 1.49x |
-| 4096 | qkv_proj | 3254.0 | 39078.5 | 14932.9 | 31301.3 | 25977.0 | 6317.4 | **5766.9** | 1.77x |
-| 4096 | o_proj | 2343.6 | 27950.6 | 10830.1 | 22301.7 | 18727.6 | 4553.2 | **4169.1** | 1.78x |
+| 1 | qkv_proj | 90.7 | 1140.4 | 372.6 | 204.5 | 207.2 | **112.5** | 0.7 | 1.24x |
+| 1 | o_proj | 71.0 | 1136.1 | 211.6 | 165.1 | 204.6 | **78.5** | 0.7 | 1.11x |
+| 1 | gate_up_proj | 451.7 | 3258.6 | 876.7 | 779.6 | 510.6 | **265.5** | 1.3 | **0.59x** |
+| 1 | down_proj | 228.3 | 3675.7 | 685.9 | 487.7 | 670.2 | **242.0** | 0.7 | 1.06x |
+| 8 | qkv_proj | 91.0 | 1148.6 | 377.0 | 213.4 | 183.3 | **114.2** | 5.1 | 1.25x |
+| 8 | o_proj | 72.6 | 1143.8 | 214.4 | 169.2 | 181.1 | **83.2** | 5.0 | 1.15x |
+| 8 | gate_up_proj | 457.0 | 3277.7 | 881.7 | 797.1 | 473.4 | **264.9** | 10.8 | **0.58x** |
+| 8 | down_proj | 237.6 | 3698.1 | 695.4 | 495.7 | 585.8 | **257.7** | 5.5 | 1.08x |
+| 32 | qkv_proj | 97.3 | 1149.9 | 506.0 | 295.3 | 191.8 | **151.7** | 15.5 | 1.56x |
+| 32 | o_proj | 77.5 | 1143.4 | 379.0 | 225.5 | 186.8 | **117.8** | 14.2 | 1.52x |
+| 32 | gate_up_proj | 475.3 | 3284.2 | 1194.6 | 1107.1 | 506.0 | **363.1** | 31.4 | **0.76x** |
+| 32 | down_proj | 250.4 | 3704.3 | 1116.4 | 674.5 | 603.9 | **373.0** | 15.3 | 1.49x |
+| 128 | qkv_proj | 130.5 | 2103.7 | 1073.5 | 913.2 | 306.3 | **291.2** | 32.3 | 2.23x |
+| 128 | o_proj | 101.6 | 1131.3 | 730.9 | 711.7 | 201.9 | **198.8** | 33.8 | 1.96x |
+| 128 | gate_up_proj | 675.1 | 6472.5 | 2604.7 | 4031.6 | **1007.9** | 1089.6 | 41.9 | 1.61x |
+| 128 | down_proj | 308.9 | 3668.8 | 2352.9 | 2153.0 | **637.7** | 661.7 | 34.5 | 2.14x |
+| 1024 | qkv_proj | 790.7 | 9910.3 | 4079.4 | 6646.5 | **1530.5** | 1557.4 | 48.3 | 1.97x |
+| 1024 | o_proj | 562.2 | 7678.4 | 3252.7 | 4788.8 | **1125.8** | 1178.8 | 45.5 | 2.10x |
+| 1024 | gate_up_proj | 4195.8 | 46438.6 | 17714.4 | 31565.8 | 7554.6 | **6873.0** | 53.1 | 1.64x |
+| 1024 | down_proj | 1915.0 | 24177.7 | 10934.6 | 16327.3 | 4004.6 | **4014.7** | 45.5 | 2.10x |
+| 4096 | qkv_proj | 3254.0 | 39078.5 | 14932.9 | 25977.0 | 6317.4 | **5766.9** | 52.1 | 1.77x |
+| 4096 | o_proj | 2343.6 | 27950.6 | 10830.1 | 18727.6 | 4553.2 | **4169.1** | 51.5 | 1.78x |
+
+M = 1, 32 and 4096 were swept over the full 480-config space; M = 8, 128 and
+1024 over a reduced 64-config space (`--quick`), which is why a few of their
+"tuned" cells are marginally *worse* than the default config — the reduced space
+does not always contain the default. Those cells are marked by the bold falling
+on the stock column. The two largest prefill shapes at M=4096 were not swept;
+see "Not done".
+
+The M=1 / M=8 / M=32 columns for `vLLM stock` are 1140 / 1149 / 1150 us — the
+kernel takes the same time for 32x the work. That flatness was the original
+tell, and it survives into the fast kernel in muted form (207 / 183 / 192),
+because at those sizes both are launch- and bandwidth-bound rather than
+arithmetic-bound.
 
 Reading it:
 
@@ -361,10 +441,20 @@ Reading it:
   at every shape — 207.2 vs 372.6 at M=1 `qkv_proj`. That is the cleanest
   statement of which problem was the big one.
 * **Together they reach 0.59-1.78x of bf16**, from 11.4-16.1x.
-* **aiter's kernel is consistently faster than vLLM's** once tuned (204.5 vs
-  372.6 at M=1 `qkv_proj`), because its config schema exposes `NUM_KSPLIT` and
-  its winner splits K 8 ways. It is still 1.8x behind the decode fix, and it is
-  a Triton kernel either way.
+* **aiter's kernel is faster than vLLM's at decode** once tuned (204.5 vs 372.6
+  at M=1 `qkv_proj`), because its config schema exposes `NUM_KSPLIT` and its
+  winner splits K 8 ways. That advantage inverts by M=128, where split-K stops
+  paying and aiter's narrower tile choice costs it (4031.6 vs 2604.7 on
+  `gate_up_proj`). It is a Triton kernel either way, and behind the decode fix
+  at every M.
+* **The crossover where FP8 stops beating bf16 sits between M=32 and M=128.**
+  On `gate_up_proj`, the largest weight matrix, FP8 is 0.58-0.59x at M=1-8,
+  0.76x at M=32, and 1.61x by M=128. Below the crossover the GEMM is bound by
+  streaming weights and FP8 moves half the bytes; above it the GEMM is bound by
+  arithmetic, where FP8 and bf16 share one 181 TFLOP/s ceiling and the decode
+  work is pure overhead. This is the same shape as the INT8 result in
+  [`20-int8-gemm-gfx90a.md`](20-int8-gemm-gfx90a.md) — 4.3x at M=16, a wash at
+  M=4096 — and for the same reason.
 
 ### FP8 beats bf16 at decode, which the arithmetic argument does not predict
 
@@ -407,27 +497,68 @@ custom HIP op there, not a Triton FP8 cast, so it never hit the emulation path.
 
 ## 5. End-to-end: does it show up in serving?
 
-Yes — about 9-11x. Same harness, model and server flags as
+Yes — 8.6-10.8x. Same harness, model and server flags as
 [`benchmarks/vllm-aiter-asm-gfx90a.md`](../benchmarks/vllm-aiter-asm-gfx90a.md)
 part 3, so the rows are directly comparable. `Qwen/Qwen3-14B-FP8`, one MI210,
-`stock` attention config in both cases, so the GEMM is the only difference.
+`stock` config on both sides, so the GEMM is the only difference. Full grid:
+prompt 128 and 4096 at concurrency 1/8/32.
 
-| prompt | conc | FP8 before | **FP8 after** | gain | bf16 (ASM attn) | FP8 after / bf16 |
+| prompt | conc | FP8 before | **FP8 after** | gain | bf16 stock | FP8 / bf16 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 128 | 1 | 2.7 tok/s | **28.9** | **10.7x** | 39.7 | 0.73x |
-| 128 | 8 | 19.6 tok/s | **168.8** | **8.6x** | 198.1 | 0.85x |
-| 4096 | 1 | 2.1 tok/s | **18.7** | **8.9x** | 27.4 | 0.68x |
+| 128 | 1 | 2.7 | **29.2** | **10.8x** | 39.1 | 0.75x |
+| 128 | 8 | 19.6 | **168.8** | **8.6x** | 197.6 | 0.85x |
+| 128 | 32 | not run | **468.2** | — | 608.1 | 0.77x |
+| 4096 | 1 | 2.1 | **18.6** | **8.9x** | 27.0 | 0.69x |
+| 4096 | 8 | not run | **36.9** | — | 50.7 | 0.73x |
+| 4096 | 32 | not run | **43.2** | — | 64.9 | 0.67x |
 
-TPOT was pinned at 373-383 ms in every FP8 cell before — the signature of a
-kernel doing no useful work. It is now **34.0-36.0 ms**, against bf16's 25-26 ms,
-and it moves with load again.
+Output tok/s. The three "not run" cells were never measured before because FP8
+was too slow to be worth the wall time. bf16 is the `stock` column from part 2,
+the correct comparison since neither side has ASM attention.
 
-The bf16 column had ASM attention enabled and FP8 here did not, so 0.68-0.85x
-understates the remaining gap slightly in FP8's favour on attention and
-overstates it on nothing. The honest summary is that FP8 now serves at roughly
-three-quarters of bf16 throughput while using **1.75x less weight memory
-(15.71 vs 27.52 GiB) and holding 1.40x more KV cache (240,992 vs 172,000
-tokens)** — which is a trade worth making, where 0.07x was not.
+TTFT and TPOT, the numbers that show *where* it changed:
+
+| prompt | conc | TTFT before | TTFT after | TPOT before | **TPOT after** | bf16 TPOT |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 1 | — | 108.4 | 373-383 | **33.7** | 25.3 |
+| 128 | 8 | — | 1401.3 | 373-383 | **36.7** | 38.4 |
+| 128 | 32 | — | 1724.2 | — | **55.1** | 45.4 |
+| 4096 | 1 | — | 2382.3 | 373-383 | **35.4** | 26.2 |
+| 4096 | 8 | — | 8146.7 | — | **153.0** | 118.0 |
+| 4096 | 32 | — | 19645.1 | — | **586.9** | 394.2 |
+
+TPOT was pinned at 373-383 ms in *every* FP8 cell before, independent of prompt
+length and concurrency — the signature of a kernel doing no useful work. It now
+tracks load the way bf16 does, and at 128:8 it is actually **below** bf16's.
+
+### Memory, which is the entire point
+
+| | weights | KV cache | KV tokens |
+|---|---:|---:|---:|
+| bf16 | 27.52 GiB | 26.25 GiB | 172,000 |
+| FP8 | **15.71 GiB** | **38.08 GiB** | **249,568** |
+| ratio | **1.75x less** | 1.45x more | **1.45x more** |
+
+Unchanged by this work — the patch only alters how the GEMM decodes weights, not
+how they are stored — but it is the reason the throughput number matters. FP8
+now serves at **0.67-0.85x of bf16 while fitting 1.45x more context**, where
+before it was 0.07x and the trade was indefensible.
+
+### Did the GEMM win translate?
+
+Yes, and this is worth recording explicitly, because the last kernel measured on
+this box did not. ASM paged-attention decode was **1.72x in isolation** and
+**~1.1-1.5%** in serving, because it was not the bottleneck. Here the GEMM was
+5.5-6x faster untuned and ~10x with tuning, and serving moved 8.6-10.8x — the
+full amount. The difference is that the FP8 GEMM *was* the bottleneck: TPOT
+being constant at 373 ms regardless of batch size said so before any kernel was
+touched, and that is the signal worth trusting next time.
+
+Against the bar the team set — FP8 within 10-20% of bf16 while keeping 1.75x
+weight memory — the 128-token cases land at 0.75-0.85x and clear it at
+concurrency 8. The 4096-token cases sit at 0.67-0.73x and do not. Prefill is
+compute-bound, where FP8 provably cannot beat bf16 on CDNA2, so that gap is
+structural rather than a tuning deficit.
 
 ---
 
@@ -449,8 +580,17 @@ on the largest projections.
 On the AITER question specifically: **leave the gate closed.** Not because the
 kernel needs FP8 hardware — the one gfx90a can reach does not — but because on
 this arch it resolves to a Triton kernel that the patched vLLM path already
-beats by 1.8x. `AiterFp8BlockScaledMMKernel` would be worth reaching on gfx942,
-where it is CK or ASM. Here it is neither.
+beats. `AiterFp8BlockScaledMMKernel` would be worth reaching on gfx942, where it
+is CK or ASM. Here it is neither.
+
+And on "would CK be faster than Triton for FP8 here": **no, twice over.** CK's
+FP8 path on gfx90a is numerically broken — it computes exactly a quarter of the
+sum — and even repaired it would run its matmul on fp32 MFMA at ~45 TFLOP/s
+against the 181 that Triton reaches through fp16, while paying the same emulated
+conversions. There is no version of this where CK wins on CDNA2. The
+format-matching question the team raised turns out not to bite: the rowwise CK
+module cannot serve a block-quantized checkpoint, but the block-scaled one that
+can is the one that is broken.
 
 ### What shipped
 
@@ -467,6 +607,9 @@ where it is CK or ASM. Here it is neither.
   — the four-way comparison and config sweep that produced the tables above.
 * [`benchmarks/probe_fp8_convert_cost_gfx90a.py`](../benchmarks/probe_fp8_convert_cost_gfx90a.py)
   — the convert-only measurement that pins the cost to e4m3.
+* [`benchmarks/probe_ck_fp8_blockscale_gfx90a.py`](../benchmarks/probe_ck_fp8_blockscale_gfx90a.py)
+  — builds CK's block-scaled FP8 GEMM for gfx90a, disassembles it out of the
+  fatbin, and demonstrates the quarter-sum defect.
 
 ### Not done
 
@@ -475,3 +618,10 @@ where it is CK or ASM. Here it is neither.
 * The `M=4096` row covers `qkv_proj` and `o_proj` only — the sweep was stopped
   before the two largest prefill shapes, which are the least interesting case
   (prefill is compute-bound, where FP8 provably cannot beat bf16).
+* The **rowwise** CK module (`module_gemm_a8w8`) was not rebuilt with its FP8
+  half restored. It shares the identical broken intrinsic in
+  `ck/utility/amd_xdlops.hpp`, so it would exercise the same defect, and being
+  rowwise it cannot serve a block-quantized checkpoint even if fixed. Worth 35
+  minutes of build time only if someone wants that confirmed separately.
+* The CK quarter-sum defect is worth reporting upstream, alongside the LLVM
+  register-allocator hang from [`20-int8-gemm-gfx90a.md`](20-int8-gemm-gfx90a.md).

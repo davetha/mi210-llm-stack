@@ -988,17 +988,45 @@ does not merely catch up to bf16 there — at M=1 `gate_up_proj` it runs at
 **0.59x of bf16's time**. The "FP8 cannot beat bf16 on CDNA2 because they share
 one 181 TFLOP/s peak" reasoning is right about arithmetic and wrong about decode.
 
-End to end that is worth 8.6-10.7x: `Qwen3-14B-FP8` on one MI210 goes from 2.7 to
-**28.9 tok/s** at 128 tokens / concurrency 1, with TPOT dropping from 373 ms to
-34 ms. FP8 now serves at ~0.73x of bf16 while holding 1.75x less weight memory
-and 1.40x more KV cache. The previous verdict — "not usable for serving" — is
-withdrawn.
+End to end that is worth 8.6-10.8x: `Qwen3-14B-FP8` on one MI210 goes from 2.7 to
+**29.2 tok/s** at 128 tokens / concurrency 1, with TPOT dropping from 373 ms to
+33.7 ms. Across the full 128/4096 x 1/8/32 grid FP8 serves at 0.67-0.85x of bf16
+while holding 1.75x less weight memory and 1.45x more KV cache (249,568 tokens
+vs 172,000). The previous verdict — "not usable for serving" — is withdrawn.
+
+Worth noting against the ASM decode kernel, which measured 1.72x in isolation and
+~1% in serving: this GEMM win translated in full. The difference was knowable in
+advance — TPOT sitting at 373 ms regardless of batch size said the GEMM was the
+bottleneck before any kernel was touched. A flat cost curve is the signal to
+trust.
+
+And on whether CK would beat Triton for FP8 here: **no, it is wrong rather than
+slow.** CK's block-scaled FP8 GEMM builds for gfx90a in 315 s and needs no FP8
+hardware — 12,288 `v_mfma_f32_16x16x4f32` and zero FP8 opcodes — because
+`ck/utility/amd_xdlops.hpp` guards the FP8 MFMA with `#if defined(__gfx94__)` and
+falls back to converting to f32. But the fallback hands one scalar per lane to
+`intrin_mfma_f32_16x16x4f32`, a K=4 instruction, so three of every four K lanes
+contribute nothing: it returns **exactly a quarter** of the correct sum (relerr
+against `full/4` is 0.0014, which is just bf16 rounding) with ~1.7% NaN. Verified
+with all-ones scales, where layout cannot be blamed. Even repaired it would run
+its matmul on fp32 MFMA at ~45 TFLOP/s against the 181 Triton gets from fp16.
+An upstream CK defect on any target without FP8 MFMA, next to the LLVM
+register-allocator hang from the INT8 work.
+
+A near-miss worth recording: the first CK pass produced a plausible timing table
+before the NaN was noticed, because the correctness gate read
+`if relerr > 0.02: skip` and `nan > 0.02` is False in Python. Those numbers were
+withdrawn and the gate is now `not (relerr < 0.02)` plus an isfinite check.
 
 Also settled: is AITER's FP8 block GEMM dequant-based or FP8-hardware-dependent?
-**Both, depending on which implementation.** Its CK kernel selects
-`mfma_f32_16x16x32f8f8` for `f8_t` operands with no CDNA2 case in the `#if` chain,
-and that instruction is rejected by the assembler for gfx90a — genuinely
-hardware-dependent. But `_hip_blockscale_supported()` excludes gfx90a and falls
-back to aiter's *Triton* kernel, which is dequant-based and runs fine. So opening
-the gate PR #12 closed would route to Triton, not to ASM. See
+**Dequant-based in every implementation that compiles**, CK included. An earlier
+version of this entry said CK was "genuinely hardware-dependent" because it
+selects `mfma_f32_16x16x32f8f8`, which the assembler rejects for gfx90a. That was
+wrong — the intrinsic is guarded, not required, and the `#else` branch compiles.
+The genuine exception is the ASM `fp8gemm_blockscale` family: prebuilt gfx942
+blobs containing FP8 opcodes, with no source fallback to fall back to.
+
+Either way `_hip_blockscale_supported()` excludes gfx90a and routes to aiter's
+Triton kernel, so opening the gate PR #12 closed would reach Triton, not ASM —
+and the CK alternative behind it is broken. The gate stays closed. See
 `docs/21-fp8-block-gemm-gfx90a.md`.
