@@ -1,8 +1,16 @@
 # pa_fwd_asm Decode on gfx90a: Full Investigation Transcript
 
+> ⚠️ **SUPERSEDED — the conclusion below is wrong.** `pa_fwd_asm` **does** work on
+> gfx90a. The blocker was a stale JIT module whose kernarg layout predated the
+> installed `.co` files, which made every `buffer_store` get silently dropped —
+> not an ISA incompatibility. See
+> [`18-pa-fwd-asm-resolved.md`](18-pa-fwd-asm-resolved.md).
+> This document is kept as a record of the investigation, including the dead ends.
+
 **Date**: 2026-07-27
 **Goal**: Get AITER ASM paged-attention decode (`pa_fwd_asm`) working on AMD MI210 (gfx90a)
 **Outcome**: gfx942 binaries cannot run on gfx90a. Two native alternatives work.
+**Correction (2026-07-27)**: Outcome disproved — see banner above.
 
 ---
 

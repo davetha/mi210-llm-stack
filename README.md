@@ -6,6 +6,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **ATOM integration (2026-07-27)**: 1,251 ASM .co files patched. ATOM framework generates coherent text on MI210 at 34.5 tok/s via hybrid ASM prefill + Triton decode. ROCm 7.14.0, AITER 0.1.17, Python 3.14. See [`docs/16-complete-technical-reference.md`](docs/16-complete-technical-reference.md) for the full technical reference.
 
+> **ASM paged-attention decode fixed (2026-07-27)**: `pa_fwd_asm` **does** run on gfx90a — 48/48 configs numerically exact vs a PyTorch reference. The earlier "gfx942 binaries can't run on gfx90a" conclusion was wrong: the real blocker was a **stale JIT module** whose kernarg layout predated the installed `.co` files, so the kernel ran at full speed and silently discarded every store. Also audits all 1,251 patched `.co` files. See [`docs/18-pa-fwd-asm-resolved.md`](docs/18-pa-fwd-asm-resolved.md).
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---

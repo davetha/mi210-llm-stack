@@ -911,3 +911,37 @@ See docs/16-complete-technical-reference.md for the full 9-section reference:
 executive summary, patch recipe, operator inventory, validated operators,
 ATOM integration guide, known issues, working configurations, infrastructure
 setup, and patch scripts reference.
+
+### pa_fwd_asm: Root Cause Was a Stale JIT Module, Not the ISA
+
+The "gfx942 binaries cannot run on gfx90a" conclusion was wrong. `pa_fwd_asm` is
+numerically exact on MI210 — 48/48 configs vs a PyTorch reference.
+
+`module_attention_asm.so` was built at 20:29; `asm_pa.cu` and every `.co` were
+replaced at 22:05, with an `mtp` field added to `KernelArgs` in between. The stale
+module wrote `GQA` at kernarg +0xe0 while the new kernel read +0xf0, getting 0. The
+kernel derives `num_records = 0x100 * GQA` for its output buffer descriptor, and
+`num_records == 0` puts every buffer access out of range — so all `buffer_store`s
+were discarded. The kernel launched, ran at ~1 TB/s, reached `s_endpgm`, and wrote
+nothing. The "garbage output" was uninitialised `torch.empty_like(Q)`.
+
+Second bug: 3 of 8 portable pa kernels still had the wrong `D3E1->D3CD` MFMA patch
+instead of `D3E1->D3E7`.
+
+### Disassemble-and-Reassemble Beats Guessing at Encodings
+
+Re-assembling all 3,303 instructions with `llvm-mc -mcpu=gfx90a` gives zero errors;
+the only byte difference in the whole kernel is the MFMA opcode. The accvgpr, FLAT
+and VOP3P incompatibility theories were all wrong. New tool
+`configs/repatch_gfx942_to_gfx90a.py` re-encodes through the assembler and refuses
+kernels that don't assemble — portability proven, not assumed.
+
+### Most of the 1,251 Patched Files Are Not Actually Portable
+
+Audit: only 242 of 1,422 gfx942 kernels are portable. Of the 1,251 installed in
+`hsa/gfx90a/`, 1,147 contain gfx942-only instructions, and 74 of the remaining 104
+miss a second opcode (`v_mfma_f32_32x32x8_bf16`). Those 74 are inert because
+`mha.py`/`mla.py` gate the v3 ASM paths to gfx942/gfx950 — which also means the
+earlier "ASM flash attention 4.79M tok/s" and "ASM MLA" numbers were the CK/Triton
+fallback, not ASM. `pa_fwd` mattered because it is the one op selected by
+`get_gpu_arch()` directory lookup rather than a Python arch gate.
