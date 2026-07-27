@@ -49,6 +49,40 @@ See [`kv-compression-prefill.md`](./kv-compression-prefill.md) for full details.
 
 ---
 
+## AITER ASM Attention — Kernel and Serving
+
+Two linked results on AMD's hand-written ASM attention kernels, which ship for
+gfx942/gfx950 only and were ported to gfx90a here.
+
+**Kernels in isolation** ([`asm-attention-gfx90a.md`](./asm-attention-gfx90a.md)) —
+every number produced by a backend that passed a correctness check immediately
+before being timed:
+
+| Path | vs alternative | Peak |
+|---|---:|---|
+| Prefill `fmha_v3_fwd` vs PyTorch SDPA | 1.13–1.86× | 89.9 TFLOP/s (50% of bf16 peak) |
+| Decode `pa_fwd_asm` vs HIP kernel | 0.99–1.72× | >1 TB/s (64% of HBM2e peak) |
+
+**End to end under vLLM** ([`vllm-aiter-asm-gfx90a.md`](./vllm-aiter-asm-gfx90a.md)) —
+Qwen3-14B bf16, same hardware, attention backend the only variable:
+
+| Prompt | conc 1 | conc 8 | conc 32 |
+|---|---:|---:|---:|
+| 128 tokens | 1.02× | 1.00× | 1.02× |
+| 4096 tokens | 1.01× | **1.23×** | **1.23×** |
+
+> The ASM kernels are worth **1.23× serving throughput on long prompts under
+> concurrency, and nothing on short prompts or single streams**. Of that gain,
+> the ASM *decode* kernel accounts for ~1% — within run-to-run noise, so a
+> 1.72× kernel proved indistinguishable from zero once the GEMMs and scheduling
+> around it are included. The gain comes from the prefill path.
+>
+> vLLM could not reach AITER on gfx90a at all before this: its dispatch gate
+> calls `on_mi3xx()` (gfx942/gfx950) while documenting itself as gfx9, and the
+> failure is silent. See [`configs/enable_vllm_aiter_gfx90a.py`](../configs/enable_vllm_aiter_gfx90a.py).
+
+---
+
 ## Summary Table
 
 ### vLLM (single MI210)
