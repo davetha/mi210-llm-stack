@@ -39,6 +39,14 @@ attention kernels and **does** keep its memory saving (1.75x on weights, 1.40x
 more KV cache), but serves 10–15x slower, because the only FP8 GEMM available on
 CDNA2 is an untuned Triton kernel running at 4.6% of the card's peak.
 
+> ⚠️ **Part 3's slowness has since been fixed, and the diagnosis below is
+> wrong.** It was not a missing tuning config. gfx90a has no FP8 *decode*
+> instruction, so the kernel emulated `e4m3 → fp16` in software — 7,106 of
+> 11,997 instructions, against 64 MFMA. A 3-op bit-reinterpret decode takes FP8
+> from 2.7 to **29.2 tok/s**, i.e. 0.67–0.85x of bf16 rather than 0.07x. Parts 1
+> and 2 (the bf16 ASM A/B) are unaffected and stand as written. See
+> [`../docs/21-fp8-block-gemm-gfx90a.md`](../docs/21-fp8-block-gemm-gfx90a.md).
+
 ---
 
 ## Part 1 — vLLM could not reach AITER on gfx90a at all

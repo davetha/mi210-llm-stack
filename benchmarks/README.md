@@ -91,14 +91,22 @@ Qwen3-14B bf16, same hardware, attention backend the only variable:
 |---|---:|---:|---|
 | Weights in VRAM | 27.52 GiB | 15.71 GiB | 1.75× saving, **survives** |
 | KV cache | 172,000 tok | 240,992 tok | 1.40× more |
-| Output tok/s (128 tok, conc 8) | 198.1 | 19.8 | **0.10×** |
+| Output tok/s (128 tok, conc 1) | 39.7 | 2.7 → **29.2** | 0.07× → **0.74×** |
 
 > FP8 loads, keeps its weights as `float8_e4m3fn` in VRAM (no load-time
 > dequant), and **still reaches the bf16 ASM attention kernels** — the
-> weight-only hypothesis holds. But it serves 10–15× slower: the only FP8 GEMM
-> available on CDNA2 is an untuned Triton block-scaled kernel that peaks at
-> **8.3 TFLOP/s vs bf16's ~96** on the same shapes. Not a hardware limit — a
-> missing tuning config, and the warning names the exact file.
+> weight-only hypothesis holds.
+>
+> ⚠️ **The "10–15× slower" result below was real but its diagnosis was wrong,
+> and it is now fixed.** This page originally blamed a missing tuning config,
+> because vLLM names the exact missing file. The actual cause is that gfx90a has
+> no FP8 *decode* instruction: the kernel spent **7,106 of its 11,997
+> instructions** emulating `e4m3 → fp16` in software, against 64 doing matrix
+> math. Tuning alone only reaches 4.1× slower; a 3-op bit-reinterpret decode
+> reaches **0.67–0.85× of bf16**, and is *faster* than bf16 at decode (M=1),
+> where streaming half the weight bytes beats the shared 181 TFLOP/s ceiling.
+>
+> See [`../docs/21-fp8-block-gemm-gfx90a.md`](../docs/21-fp8-block-gemm-gfx90a.md).
 
 ---
 
