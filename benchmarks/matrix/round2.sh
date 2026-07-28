@@ -168,12 +168,20 @@ fi
 # LINEARLY in the pinned-layer count. If the curve is not linear, the bandwidth
 # model is wrong and the doc must say so. This is a real test, not a formality.
 # ---------------------------------------------------------------------------
-banner "E7  GLM-4.6 GGUF + --n-cpu-moe sweep (tests docs/26 bandwidth model)"
-fetch "$MODELS/glm46-q4km" bartowski/zai-org_GLM-4.6-GGUF
+# FIXED: this pointed at $MODELS/glm46-q4km, which does not exist -- all three
+# arms died instantly with "gguf_init_from_file: failed to open ... (No such
+# file or directory)". The fetch would not have saved it either: bartowski's
+# repo carries every quant, and without --include it pulls terabytes.
+#
+# Using the IQ3_XS already on disk is also the BETTER experiment. The auto-fit
+# run that serves as the N~0 anchor was IQ3_XS, so this varies only
+# --n-cpu-moe against it. Comparing a Q4_K_M sweep to an IQ3_XS anchor would
+# have confounded quant with placement -- the same mistake as the TP=2 rows.
+banner "E7  GLM-4.6 IQ3_XS + --n-cpu-moe sweep (tests docs/26 bandwidth model)"
 for N in 30 45 60; do
     echo "--- n-cpu-moe=$N ---"
     ARM_TIMEOUT=7200 READY_TIMEOUT=3600 \
-        "$BIN/run_arm.sh" "glm46-q4km-ncmoe$N" 400B q4_k_m llamacpp "$MODELS/glm46-q4km" \
+        "$BIN/run_arm.sh" "glm46-iq3xs-ncmoe$N" 400B iq3_xs llamacpp "$MODELS/glm-gguf-iq3xs" \
         --ctx-size 32768 -ub 2048 --flash-attn on -ngl 999 --n-cpu-moe "$N"
 done
 
