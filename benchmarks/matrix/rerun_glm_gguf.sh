@@ -18,7 +18,7 @@ BIN=$B/bin
 while ps -eo cmd | grep -qE "[s]weep_glm.sh|[s]weep_t235|[b]f16_last|[r]erun_t80_cold|[r]etry_t80_awq8|[s]weep_int8_formats|[t]une_moe_targeted"; do sleep 60; done
 while docker ps --format "{{.Names}}" | grep -q "^bench-"; do sleep 30; done
 echo "### GLM-4.6 IQ3_XS re-run, NGL=auto $(date -u)"
-TP=1 NGL=auto LONGCTX_TOKENS=28000 READY_TIMEOUT=20000 \
+TP=1 NGL=auto ARM_TIMEOUT=10800 LONGCTX_TOKENS=28000 READY_TIMEOUT=20000 \
   $BIN/run_arm.sh glm46-iq3xs 400B iq3_xs llamacpp $B/glm-gguf-iq3xs \
   --ctx-size 32768 --n-cpu-moe 20 \
   || echo "!! glm46-iq3xs failed again (recorded)"

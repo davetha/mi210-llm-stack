@@ -103,7 +103,14 @@ for wl in cold16k longctx; do
     # tty, so Python block-buffers it and a long arm shows NOTHING until the
     # buffer fills or the process exits -- on a 357B model that is 20+ minutes
     # of apparent silence that reads exactly like a hang.
+    # ARM_TIMEOUT raises the per-request budget for tiers where a single
+    # prefill legitimately runs for many minutes. bench_matrix caps each socket
+    # read at max(600, timeout/4), so the default 3600 gives a 900 s read cap --
+    # fine everywhere except the ~400B CPU-offloaded arms, where TTFT at 28k can
+    # approach that on its own. Aborting there would record a failure that is
+    # really just a slow but working configuration.
     python3 -u "$BIN/bench_matrix.py" \
+        --timeout "${ARM_TIMEOUT:-3600}" \
         --url "http://127.0.0.1:$PORT" --model bench \
         --label "$LABEL" --workload "$wl" \
         --tier "$TIER" --quant "$QUANT" --engine "$ENGINE" \

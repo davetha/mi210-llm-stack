@@ -16,7 +16,7 @@ BIN=$B/bin
 while ps -eo cmd | grep -qE "[/]sweep_glm.sh|[/]rerun_glm_gguf.sh|[/]sweep_t235.sh|[/]bf16_last.sh|[/]rerun_t80_cold.sh|[/]retry_t80_awq8.sh|[/]sweep_int8_formats.sh|[/]tune_moe_targeted.sh"; do sleep 60; done
 while docker ps --format "{{.Names}}" | grep -q "^bench-"; do sleep 30; done
 echo "### GLM-4.6 AWQ cold16k re-run $(date -u)"
-TP=2 LONGCTX_TOKENS=28000 READY_TIMEOUT=20000 \
+TP=2 ARM_TIMEOUT=10800 LONGCTX_TOKENS=28000 READY_TIMEOUT=20000 \
   $BIN/run_arm.sh glm46-awq-cold 400B awq-int4 vllm-aiter $B/glm-awq \
   --max-model-len 32768 --safetensors-load-strategy=prefetch \
   --cpu-offload-gb 70 --gpu-memory-utilization 0.95 \
