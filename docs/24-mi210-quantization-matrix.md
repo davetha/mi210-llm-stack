@@ -162,6 +162,33 @@ not marginally better, it is the only viable option.
 
 ## What is not settled
 
+### Tier 4 — vLLM's CPU offload is not competitive at 357B
+
+GLM-4.6 AWQ-Int4 (357B) **loads and serves correctly** on 2× MI210 with vLLM:
+
+| | |
+|---|---|
+| CPU-offloaded parameters | **70.51 GB** |
+| Model load | 419 s |
+| GPU KV cache | 232,368 tokens (7.09× concurrency at 32k) |
+| Correctness probe | **PASS** |
+
+**No throughput number is reported, deliberately.** A single 28k-token warmup
+request ran past 35 minutes at a steady 505% container CPU — computing, not
+stalled — which projects to roughly two hours for one arm. That was stopped
+rather than allowed to block the rest of the queue.
+
+The number that would have come out is not the interesting one anyway. vLLM's
+CPU offload is UVA-based: parameters live in host memory and are faulted across
+PCIe on demand. llama.cpp's `--n-cpu-moe` instead keeps attention resident and
+pages only expert weights, which is the right structure for a sparse MoE. The
+GGUF arm on llama.cpp is where this tier gets a usable answer.
+
+So the honest tier-4 finding so far is a **capability** result, not a throughput
+one: a 357B model does run on two MI210s with 70 GB in system RAM and produces
+correct output. Whether it runs *usefully* depends on the offload mechanism, and
+vLLM's is the wrong one here.
+
 - **Tiers 2–4 are still running.** 80B (Qwen3-Next, hybrid GDN), 235B
   (GPTQ-Int4 at reduced context), GLM-4.6 (IQ3_XS with CPU offload).
 - **The MoE expert GEMMs are still not tuned.** All 48 AWQ layers fall back
