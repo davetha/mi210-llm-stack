@@ -26,3 +26,6 @@ core.*
 
 # OMC orchestration scratch (run-continuation state, not project content)
 .omo/
+
+# ...and in any subdirectory (a nested .omc/ slipped into results/ once)
+**/.omc/

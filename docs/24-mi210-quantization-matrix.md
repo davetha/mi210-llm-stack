@@ -103,6 +103,14 @@ AWQ-8bit was dropped for the same reason rather than measured: it uses the same
 `moe_wna16` loader and the same w8a16 scheme, so it would have cost another
 45+ minutes to confirm a mechanism already established by profile.
 
+> **Later finding — the inference in that paragraph does not generalise.** The
+> w8a16 half is right; the loader half is not. Tier 2's
+> `cyankiwi/Qwen3-Next-80B-A3B-Thinking-AWQ-8bit` is *named* AWQ but is packaged
+> `compressed-tensors` / `pack-quantized`, so it takes the fast loader and was
+> resident in **183.7 s**. **Load time follows `quant_method`, not the repo
+> name and not the bit width** — only `gptq` packaging hits the pathological
+> per-expert loop. Full two-axis breakdown in `docs/26`.
+
 ### INT8 wins because CDNA2's INT8 peak equals its bf16 peak
 
 gfx90a provides `v_mfma_i32_16x16x16i8` and peaks at **181 TOPS INT8 — the same
@@ -273,7 +281,13 @@ vLLM's is the wrong one here.
   MI308X / MI325X / MI350X / MI355X / R9700 / A100 and **none for MI210**, so
   the kernel runs on generic heuristics. Tuning is queued.
 - **The tier-2 format set differs from tier 1** because no INT8 W8A8 checkpoint
-  exists for Qwen3-Next-80B, not because arms were skipped.
+  exists for Qwen3-Next-80B-**Thinking**, not because arms were skipped.
+  ~~no INT8 W8A8 checkpoint exists for Qwen3-Next-80B~~ — **corrected**:
+  `RedHatAI/Qwen3-Next-80B-A3B-Instruct-quantized.w8a8` does exist (85.73 GB,
+  `compressed-tensors` / `int-quantized`, activations 8-bit dynamic per-token).
+  It is the Instruct variant, so it was not a drop-in for the Thinking arm, but
+  the general claim was too broad. It is now the highest-value untested config
+  on this box — see `docs/26`.
 - **bf16 baseline is deferred to last.** It needs TP=2 (61 GB will not share a
   64 GB card with a KV cache), and TP=2 costs ~3 hours of *pure CPU* in vLLM's
   per-expert MoE loader — 697 s per shard while the same file reads at 3.0 GB/s.

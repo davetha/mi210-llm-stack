@@ -51,24 +51,18 @@ So there are (at least) two slow loaders, not one, and a fix for either does
 nothing for the other. `_load_w13`'s destination-side scatter remains an open
 suspect for the bf16 path specifically.
 
-Also note the earlier framing error, already corrected: TP>1 is not sufficient
-to trigger this. `compressed-tensors` loads fast at TP=2 (GLM-4.6: 9.11 s/it),
-while bf16 and GPTQ are slow. Whatever the real cost is, it is quant-method
-specific.
+### The cost is quant-method specific, not TP specific
 
-**Practical consequence, independent of the fix:** a 235B at TP=2 on this
-hardware costs ~7 hours to load. That is not a benchmark artifact, it is the
-deployment reality, and it makes vLLM impractical for that tier here.
-
----|---|---|---|
+| Model | TP | `quant_method` | Load rate |
+|---|---:|---|---:|
 | 30B bf16 | 2 | none (bf16) | **697 s/shard** |
-| 235B GPTQ-Int4 | 2 | gptq | **810 s/shard** |
-| 80B AWQ | 1 | compressed-tensors | 1.10 s/it |
-| GLM-4.6 AWQ | **2** | compressed-tensors | **9.11 s/it** |
+| 235B GPTQ-Int4 | 2 | `gptq` | **810 s/shard** |
+| 80B AWQ | 1 | `compressed-tensors` | 1.10 s/it |
+| GLM-4.6 AWQ | **2** | `compressed-tensors` | **9.11 s/it** |
 
-**TP>1 is not sufficient to cause it.** GLM-4.6 runs TP=2 and loads two orders
-of magnitude faster. The slow arms are bf16 and GPTQ; `compressed-tensors` is
-fast at either TP, so it evidently does not reach the `_load_w13` path `py-spy`
+**TP>1 is not sufficient to cause it.** GLM-4.6 runs TP=2 and loads two orders of
+magnitude faster. The slow arms are bf16 and `gptq`; `compressed-tensors` is fast
+at either TP, so it evidently does not reach the `_load_w13` path `py-spy`
 caught.
 
 I briefly read GLM's fast load as confirming the patch. It does not — that
@@ -76,12 +70,49 @@ container was created from the image tag *before* the patched layers were
 committed (`e27dbf262daa` vs `85de3e47a14e`), and `grep -c
 loaded_weight.is_contiguous()` inside it returns 0. It was fast without the fix.
 
-So: the diagnosis is still grounded — `py-spy` put every sample in `_load_w13`
-on the 30B bf16 TP=2 run, and the strided-copy mechanism is real for paths that
-reach it. But **the patch is unvalidated**, and its scope is narrower than
-"TP>1": it should help bf16 and GPTQ specifically. The 235B GPTQ re-run, which
-will pick up the patched image, is the real test against its 810 s/shard
-baseline.
+**Practical consequence, independent of any fix:** a 235B at TP=2 on this
+hardware costs ~7 hours to load. That is not a benchmark artifact, it is the
+deployment reality, and it makes vLLM impractical for that tier here.
+
+**The deployment-side workaround is now the recommendation** and it does not
+require patching anything: choose `compressed-tensors` packaging. `docs/26`
+turns this into a checkpoint-selection rule. That does not close the lead — the
+bf16 and `gptq` loaders are still slow — but it removes the urgency, since no
+recommended configuration goes through either of them.
+
+---
+
+## 1b. A Triton W4A8-int kernel for ROCm — now the highest-value open lead
+
+**Evidence.** `docs/27`. int8 is the only sub-16-bit matrix dtype gfx90a has
+(verified by assembler: every `i4`, `fp8` and `smfmac` form is rejected), so
+W8A8 is currently the *only* format that reaches quantized arithmetic. W4A8-int8
+would halve weight bytes again while keeping `v_mfma_i32_16x16x16i8` — the right
+direction on a chip where INT8 is bandwidth-bound, not arithmetic-bound.
+
+Both halves of the software already exist: vLLM ships
+`compressed_tensors_w4a8_int.py`, and llm-compressor produces the checkpoints.
+
+**What blocks it.** Every kernel in the mixed-precision registry that accepts
+`act_type == torch.int8` is unreachable here — `marlin.py` is CUDA PTX,
+`dynamic_4bit.py` is ARM/KleidiAI. Every ROCm-reachable kernel
+(`triton_w4a16`, `rdna_hybrid_w4a16`, `exllama`) requires fp16/bf16 activations.
+
+**Proposed.** Write a Triton w4a8-int kernel — unpack int4 → int8 in-register,
+dynamic per-token activation quantization, `tl.dot` with int8 operands into an
+int32 accumulator — and register it in the mixed-precision registry. Triton on
+ROCm does emit `v_mfma_i32_16x16x16i8` for int8 `tl.dot`, so the hardware path is
+reachable from Triton.
+
+**How this could be wrong.** This is a **new kernel, not a gate patch**, and the
+distinction matters: the Int8 MoE fix worked because a working kernel sat behind
+a bad `is_cuda()` test. Here no kernel is being wrongly excluded. Also unmeasured:
+int4 unpacking and per-token activation quantization both cost something, and on
+a bandwidth-bound chip the win could be smaller than the arithmetic suggests.
+
+**Confidence: high** that the instruction path exists, **unknown** on payoff.
+`benchmarks/matrix/round2.sh` E4 probes what vLLM currently does with a
+W4A8-int8 checkpoint on gfx90a, which is the cheap first step.
 
 ---
 
@@ -220,28 +251,71 @@ priority absent evidence that these specific shapes are underperforming.
 
 ---
 
-## 6. Runtime activation quantization for popular formats
+## 6. Runtime activation quantization for popular formats — DEPRIORITIZED
 
-**Evidence.** Pending the 8-bit format comparison now queued. If GPTQ-Int8 and
-AWQ-8bit lose to W8A8 as predicted, the cause is w8a16 — int8 weights, bf16
-activations — dequantizing to a bf16 GEMM instead of reaching
-`v_mfma_i32_16x16x16i8`.
+**The mechanism is now confirmed.** w8a16 — int8 weights, bf16 activations —
+dequantizes to a bf16 GEMM instead of reaching `v_mfma_i32_16x16x16i8`. The
+discriminator is a single field, `input_activations` in the
+`compressed-tensors` config group: populated means W8A8, `null` means
+weight-only. `docs/26`.
 
-**Proposed.** vLLM supports dynamic per-token activation quantization. If a
-w8a16 checkpoint can be served with activations quantized at runtime, popular
-formats reach the INT8 path without republishing weights.
+**The premise behind the lead was wrong, though.** It assumed W8A8 checkpoints
+are rare, so the only route to the INT8 path for a popular model was to
+synthesize activation scales at runtime. In fact `RedHatAI` alone publishes ~90
+`quantized.w8a8` checkpoints, all `compressed-tensors` `int-quantized` with
+dynamic per-token activations — covering Qwen3, Qwen3-Next, Llama 3.x, Gemma 3,
+Mistral, Phi-4, GLM-4.6 and the DeepSeek-R1 distills. **Downloading the right
+file is strictly better than patching around the wrong one**, and for anything
+genuinely unpublished, `llm-compressor` produces one offline.
 
-**How this could be wrong.** Dynamic activation quantization costs a quantize
-pass per token and changes numerics. It may not pay for itself, and accuracy
-needs checking, not just speed. **Blocked on the comparison result** — do not
-start until the mechanism is confirmed.
+**Not closed, just demoted.** The remaining case is a model with *no* W8A8 and
+*no* bf16 weights to quantize from. Rare. And the objection still stands: the
+scales in a w8a16 file were fitted for a bf16 GEMM, so runtime activation
+quantization changes numerics and needs an accuracy check, not just a throughput
+measurement.
 
-**Confidence: unknown**, deliberately. This entry exists so the follow-up is not
-forgotten, not because it is likely.
+**Confidence: high** on the mechanism, **low** that the work is worth doing.
 
 ---
 
-## 7. AITER MLA ASM
+## 7. AITER has no `hd256` fmha ASM — for any architecture
+
+**Evidence.** The tier-2 80B arms select AITER and then load **only `torch.co`** —
+no ASM code objects at all — while the tier-1 30B arms load
+`fwd_hd128_bf16_causal_rtna_group.co`. Qwen3-Next has `head_dim = 256`.
+Enumerating head dimensions in AITER's fmha ASM set:
+
+```
+=== head dims available in the gfx942 fmha ASM set ===
+hd128 hd192
+--- and which of those survived translation to gfx90a ---
+hd128 hd192
+```
+
+**This is an upstream gap, not a translation gap.** There is no `hd256` kernel
+to port. `repatch` cannot help; the 242/1,422 ceiling is not the limit here.
+
+**Consequence, already reflected in `docs/24` and `docs/26`:** AITER ASM
+attention is worth **+12.8% on `head_dim = 128` models and exactly 0% on
+`head_dim = 256` models**. The flags still cost nothing, so leave them on, but do
+not attribute 80B-class results to them.
+
+**Proposed, if it ever matters.** Writing an hd256 fmha kernel from scratch is a
+different order of work from translating one, and the payoff is bounded by the
++12.8% seen at hd128. Not worth starting unless an hd256 model becomes the
+primary workload.
+
+**How this could be wrong.** The enumeration covers the *fmha* ASM set. Other
+AITER ASM families (GEMM, MoE) are indexed differently and were not checked for
+head-dim coupling — but they are not head-dim parameterised, so this is unlikely
+to hide anything.
+
+**Confidence: high.** Verified by listing shipped code objects on both targets,
+and corroborated by which `.co` files each arm actually loads at runtime.
+
+---
+
+## 8. AITER MLA ASM
 
 **Evidence.** 11 portable MLA kernels sit behind a gate at
 `asm_mla.cu:863` (see `docs/19`). vLLM gates MLA to gfx950, so reaching them
