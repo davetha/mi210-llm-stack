@@ -25,8 +25,20 @@ dramatically faster than DMA'ing from each fresh mmap'd slice, because the
 registration happens once instead of 18,432 times.
 
     A  direct from fresh mmap'd slice   <- what vLLM does today
-    B  through a reused pinned buffer   <- the candidate fix
+    B  through a reused pinned buffer   <- candidate fix, needs a vLLM patch
     C  direct from the SAME slice twice <- isolates registration from transfer
+    D  from heap memory (eager load)    <- candidate fix, NEEDS NO PATCH
+
+D is the interesting one. vLLM already ships a load strategy that avoids mmap
+entirely -- `--safetensors-load-strategy=eager`:
+
+    with open(st_file, "rb") as f:
+        state_dict = load(f.read())     # whole shard into a heap bytes object
+
+Those tensors are backed by ordinary heap memory in one large allocation, not by
+a per-tensor mmap view. If the registration hypothesis holds, that means one
+registration per shard instead of one per tensor -- and the fix is a flag rather
+than a patch. Costs a few GB of RAM per shard, which is nothing against 499 GB.
 
 Run on an idle box. Round 3 of these probes was confounded by a concurrent load.
 """
@@ -95,7 +107,35 @@ with safe_open(path, framework="pt", device="cpu") as fh:
     run("C  same slice repeatedly (registration warm)",
         lambda: [d0.copy_(one) for _ in sl])
 
-    print()
-    if b:
-        print(f"B is {a/b:.1f}x faster than A" if b < a else
-              f"B is {b/a:.1f}x SLOWER than A -- hypothesis refuted")
+# D: heap-backed tensors, exactly what --safetensors-load-strategy=eager yields.
+# Deserialised OUTSIDE the timing loop so this measures the transfer, not the
+# read -- the same mistake probe 1 made in the other direction.
+from safetensors.torch import load as st_load
+
+with open(path, "rb") as fh_raw:
+    eager_sd = st_load(fh_raw.read())
+eager = []
+for k in keys:
+    w = eager_sd[k]
+    dd = 0 if w.ndim == 2 else 1
+    eager.append(w.narrow(dd, 0, w.shape[dd] // 2))
+emb = sum(s.numel() * s.element_size() for s in eager) / 1e6
+edsts = [torch.empty(s.shape, dtype=s.dtype, device=dev) for s in eager]
+
+torch.cuda.synchronize(); _t0 = time.perf_counter()
+for _d, _s in zip(edsts, eager):
+    _d.copy_(_s)
+torch.cuda.synchronize()
+d = time.perf_counter() - _t0
+print(f"{'D  from heap memory (eager load)  <- FLAG FIX':<48}"
+      f"{d:>9.3f}s{d/len(eager)*1000:>11.2f} ms{emb/d:>11.1f} MB/s")
+
+print()
+if b:
+    print(f"B (pinned staging) vs A: {a/b:.1f}x" if b < a else
+          f"B is {b/a:.1f}x SLOWER than A -- pinned-staging hypothesis refuted")
+print(f"D (eager/heap)     vs A: {a/d:.1f}x" if d < a else
+      f"D is {d/a:.1f}x SLOWER than A -- mmap-registration hypothesis REFUTED")
+print()
+print("If D is much faster than A, the fix is --safetensors-load-strategy=eager")
+print("and needs no code change at all.")

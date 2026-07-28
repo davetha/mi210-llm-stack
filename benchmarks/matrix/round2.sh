@@ -264,5 +264,44 @@ for p in probe_loader.py probe_loader2.py probe_loader3.py probe_loader4.py; do
         | grep -vE "^INFO|importing.py"
 done
 
+# ---------------------------------------------------------------------------
+# E11  Is the 3.6-hour load fixed by one flag?
+#
+# py-spy --native shows the loader blocked in hsakmt_ioctl -- a driver ioctl,
+# 8/8 samples. The implied mechanism is per-transfer registration of each fresh
+# mmap'd expert tensor. vLLM's default path is mmap-backed (safe_open +
+# get_tensor); its `eager` strategy is not:
+#
+#   with open(st_file, "rb") as f:
+#       state_dict = load(f.read())    # whole shard, one heap allocation
+#
+# If the mechanism is right, eager registers once per shard instead of once per
+# tensor, and this is a FLAG rather than a patch.
+#
+# This does not need a full arm. Shard times are ~815 s each at present, so two
+# shards is a decisive read: if shard 1 lands anywhere near 700 s the idea is
+# dead, and if it lands in tens of seconds it is a ~100x deployment win on every
+# bf16 and GPTQ model. Killed after two shards either way.
+# ---------------------------------------------------------------------------
+banner "E11  bf16 load with --safetensors-load-strategy=eager (baseline 815 s/shard)"
+docker rm -f bench-eager-probe >/dev/null 2>&1 || true
+VLLM_IMAGE=rocm-vllm-aiter-gfx90a:latest \
+    "$BIN/serve_vllm_aiter.sh" "$BASE/t35-bf16" bench-eager-probe 8123 \
+    --tensor-parallel-size 2 --max-model-len 131072 \
+    --safetensors-load-strategy=eager --no-enable-prefix-caching \
+    >/dev/null 2>&1 || echo "eager probe would not start"
+echo "watching shard timings (kill after 2)..."
+for _ in $(seq 1 90); do
+    line=$(docker logs bench-eager-probe 2>&1 | grep -aoE "Completed \| [0-9]+/16 \[[0-9:]+<[0-9:]+, [0-9.]+s/it" | tail -1)
+    [ -n "$line" ] && echo "  $line"
+    echo "$line" | grep -q "2/16" && break
+    docker ps --filter "name=^bench-eager-probe$" --format '{{.Names}}' | grep -q . || {
+        echo "  container exited early"; break; }
+    sleep 40
+done
+echo "--- eager result above; mmap baseline was 697 / 774 s for shards 1 and 2 ---"
+docker logs bench-eager-probe > "$BASE/logs/eager-probe.serverlog" 2>&1 || true
+docker rm -f bench-eager-probe >/dev/null 2>&1 || true
+
 banner "round 2 complete"
 python3 "$BIN/summarize_results.py" "$BASE/results"
