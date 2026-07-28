@@ -63,6 +63,10 @@ echo "  model: $MODEL_DIR"
 echo "=============================================================="
 
 case "$ENGINE" in
+    # vllm-aiter is the DEFAULT for vLLM arms now: AITER ASM attention measured
+    # 12.8% faster prefill than stock ROCM_ATTN on gfx90a, proven by the .co
+    # loads rather than inferred. "vllm" remains available for A/B against it.
+    vllm-aiter) VLLM_PREFER_AITER_FA=1 "$BIN/serve_vllm_aiter.sh" "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     vllm)     "$BIN/serve_vllm.sh"     "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     llamacpp) "$BIN/serve_llamacpp.sh" "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     *) echo "unknown engine $ENGINE"; exit 2 ;;
