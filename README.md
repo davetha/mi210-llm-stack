@@ -84,6 +84,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 - [`docs/23-vllm-gfx90a-cudagraph-decode-cliff.md`](docs/23-vllm-gfx90a-cudagraph-decode-cliff.md) — `--max-model-len` above 128k costs **10x decode on every request**, because the gfx9 attention gate is evaluated at CUDA-graph capture against the *configured* max
 - [`docs/24-mi210-quantization-matrix.md`](docs/24-mi210-quantization-matrix.md) — **which quantization wins on an MI210**: INT8 W8A8, and it was the one format vLLM refused to run. Six formats, two engines, correctness-checked
 - [`docs/25-optimization-backlog.md`](docs/25-optimization-backlog.md) — leads not yet pursued, each with how it could be *wrong*, plus the closed ones so they are not retried
+- [`docs/26-choosing-checkpoints-on-mi210.md`](docs/26-choosing-checkpoints-on-mi210.md) — **what to actually download**: two fields in `config.json` predict nearly all the performance, and neither is the repo name. Plus running MoE with experts in system RAM
+- [`docs/27-which-formats-reach-the-matrix-cores.md`](docs/27-which-formats-reach-the-matrix-cores.md) — int8 is the **only** sub-16-bit matrix dtype gfx90a has (no int4 MFMA, no fp8, no sparsity), and the AITER ASM kernels are bf16 *attention* — so they help every format, not just W8A8
 
 ### Benchmarks
 - [`benchmarks/matrix/`](benchmarks/matrix/) — the quantization matrix: harness, sweeps, raw JSON, and [`REPRODUCE.md`](benchmarks/matrix/REPRODUCE.md) with exact tags, versions and CLI args
