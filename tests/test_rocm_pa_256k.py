@@ -15,8 +15,25 @@ that is to compare its output against a reference at lengths that require 9+.
 
 What this checks
 ----------------
-For sequence lengths straddling the old ceiling, the custom kernel's output is
-compared against vLLM's Triton paged-attention on identical inputs:
+The custom kernel is compared against **vLLM's Triton paged-attention**, both
+driven through the real `chunked_prefill_paged_decode` entry point with the
+custom path forced on and then off. Triton is the reference because it is
+exactly what the current 128k gate falls back to -- so "the patch is sound"
+means precisely "the custom kernel agrees with the fallback it replaces".
+
+An earlier version of this test compared against a hand-written fp32 dense
+reference instead, and that was a mistake worth recording: it disagreed at
+**every** length including `npar_loops = 1`, which upstream has always
+supported. A reference that reimplements the paged layout is a second thing
+that can be wrong, and when it is, it fails identically at all lengths and
+tells you nothing about the patch. Comparing two kernels that consume the
+*same* tensors removes that failure mode entirely.
+
+The control cases carry the weight here: agreement at `npar_loops <= 8` is
+upstream-verified behaviour, so if those pass, the harness is sound and any
+failure at 9..16 is the patch.
+
+For sequence lengths straddling the old ceiling:
 
     131,072  npar_loops =  8  -- last length upstream supports (control)
     139,264  npar_loops =  9  -- FIRST length that needs the patch
@@ -71,20 +88,30 @@ def npar_loops(seq_len: int) -> int:
 
 
 def build_inputs(seq_len, num_heads, num_kv_heads, head_size, block_size, dtype, device):
-    """One sequence at `seq_len`, laid out as vLLM's decode path expects."""
+    """One sequence at `seq_len`, in the layout RocmAttentionBackend declares.
+
+    `RocmAttentionBackend.get_kv_cache_shape` returns
+
+        (2, num_blocks, block_size, num_kv_heads, head_size)
+
+    i.e. K and V share one tensor on a leading axis, and each block is
+    [block_size, kv_heads, head_size]. This is NOT the older
+    [num_blocks, kv_heads, head_size, block_size] layout -- getting that wrong
+    produces order-1 errors at *every* length including ones upstream already
+    supports, which is how the control case earns its place in this file.
+    """
     num_blocks = (seq_len + block_size - 1) // block_size
-    # Allocate a little slack so the block table never indexes the final block
-    # partially -- that is a separate edge case and not what is under test.
+    # A little slack so the block table never indexes a partially-filled final
+    # block -- that is a separate edge case and not what is under test.
     total_blocks = num_blocks + 16
 
     torch.manual_seed(0xA1DE)
     query = torch.randn(1, num_heads, head_size, dtype=dtype, device=device)
-    key_cache = torch.randn(
-        total_blocks, num_kv_heads, head_size, block_size, dtype=dtype, device=device
+    kv_cache = torch.randn(
+        2, total_blocks, block_size, num_kv_heads, head_size,
+        dtype=dtype, device=device,
     )
-    value_cache = torch.randn(
-        total_blocks, num_kv_heads, head_size, block_size, dtype=dtype, device=device
-    )
+    key_cache, value_cache = kv_cache[0], kv_cache[1]
     block_table = torch.arange(
         num_blocks, dtype=torch.int32, device=device
     ).unsqueeze(0)
@@ -103,9 +130,9 @@ def reference_attention(query, key_cache, value_cache, block_table, seq_len,
     gqa = num_heads // num_kv_heads
     blocks = block_table[0, : (seq_len + block_size - 1) // block_size]
 
-    # [num_blocks, kv_heads, head_size, block_size] -> [kv_heads, seq, head_size]
-    k = key_cache[blocks].permute(1, 0, 3, 2).reshape(num_kv_heads, -1, head_size)
-    v = value_cache[blocks].permute(1, 0, 3, 2).reshape(num_kv_heads, -1, head_size)
+    # [n_blocks, block_size, kv_heads, head_size] -> [kv_heads, seq, head_size]
+    k = key_cache[blocks].reshape(-1, num_kv_heads, head_size).transpose(0, 1)
+    v = value_cache[blocks].reshape(-1, num_kv_heads, head_size).transpose(0, 1)
     k = k[:, :seq_len, :].float()
     v = v[:, :seq_len, :].float()
 
@@ -132,7 +159,13 @@ def run_custom(query, key_cache, value_cache, block_table, seq_lens, max_seq_len
                              dtype=dtype, device=device)
     query_start_loc = torch.tensor([0, 1], dtype=torch.int32, device=device)
 
-    torch.ops._rocm_C.paged_attention(
+    # Go through vllm._custom_ops rather than torch.ops._rocm_C directly: the
+    # raw namespace exposes no `paged_attention` attribute until the wrapper
+    # module has registered it, and the wrapper is also what the real decode
+    # path calls, so this tests the same entry point production uses.
+    import vllm._custom_ops as ops  # noqa: PLC0415
+
+    ops.paged_attention_rocm(
         output, exp_sums, max_logits, tmp_output, query,
         key_cache, value_cache, num_kv_heads,
         scale, block_table, seq_lens, query_start_loc,

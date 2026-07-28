@@ -15,6 +15,38 @@ Ordered by expected value, not by effort.
 697 s/shard and Qwen3-235B GPTQ-Int4 takes 810 s/shard, while the same files
 read at 3.0 GB/s under `dd`. `py-spy` put every sample in `_load_w13`.
 
+### Storage is definitively not the bottleneck
+
+Worth stating flatly, because this repo got it wrong once — an early diagnosis
+blamed btrfs zstd compression for slow loads, and it was wrong. `dd` refuted it
+at 3.0 GB/s, but `dd` on one file is weak evidence. Here is the strong version,
+measured on the real model files during an actual load:
+
+```
+Prefetching checkpoint files: 80% (8/8)
+Prefetching checkpoint files into page cache finished in 13.19s
+...
+Loading safetensors checkpoint shards: 31% | 5/16 [1:06:42<2:29:31, 815.57s/it]
+```
+
+**61.08 GB (measured, `du -sb`) read in 13.19 s = 4.63 GB/s** — off
+`/mnt/llm-storage`, which is btrfs with `compress=zstd:5`. The loader then
+spends **815 s per shard**, ~3.6 hours total.
+
+Storage delivers the entire model in thirteen seconds; the loader spends three
+and a half hours. That is a **~1000× gap**, and it closes the question:
+compression, btrfs and I/O are all irrelevant to this cost. It is CPU in Python.
+
+Two practical notes that follow:
+
+- **vLLM's prefetch is on by default and needs no flag.** It is an unconditional
+  `threading.Thread(target=_run_prefetch, daemon=True).start()` in
+  `weight_utils.py`, doing plain buffered `f.read(block_size)` across a thread
+  pool. Nothing about btrfs or transparent compression defeats it — the kernel
+  decompresses into page cache on ordinary reads.
+- **Faster storage would not help.** Any effort spent on NVMe layout, disabling
+  compression, or mount tuning is aimed at 0.1% of the problem.
+
 **The fix did not work.** `configs/fast_moe_expert_load.py` makes each narrowed
 slice contiguous before the host-to-device copy. Measured on 235B GPTQ-Int4 at
 TP=2, patch verified present in the container:

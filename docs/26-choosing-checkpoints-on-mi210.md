@@ -327,8 +327,27 @@ llama-server -m <model>.gguf \
   logs `n_gpu_layers already set by user to 999, abort` and disables auto-fit for
   the whole model, at which point you own every placement decision manually.
 
-llama.cpp is not marginally better at long context, it is the only option:
-**230k tokens at 30.4 t/s decode**, against vLLM's 0.7 t/s at 241k. 43×.
+**230k tokens at 30.4 t/s decode**, against vLLM's 0.7 t/s at 241k — but that
+43× needs a caveat, because it is not a fair engine comparison.
+
+The 0.7 t/s figure is **real and reproducible** — two independent reps at 0.7468
+and 0.7502 t/s, 125 and 196 tokens generated, correctness probe passing. It is
+not a stall or a measurement artifact. But it is vLLM running *past its own
+gate*: that arm was configured `--max-model-len 262144`, so graph capture baked
+the Triton fallback in (`docs/23`). Configured at or below 131072, the same
+engine does **33.8 t/s at 101k**.
+
+So the honest statement is narrower and more useful than "43×":
+
+- **vLLM below 128k is fine** — 33.8 t/s at 101k, and faster than llama.cpp on
+  prefill throughout.
+- **vLLM above 128k falls off a cliff**, by a factor of ~45 against itself.
+- **llama.cpp has no equivalent gate**, so it is the only option *for contexts
+  beyond 128k* — not the only option for long context generally.
+
+That cliff is a fixable bug, not a property of the hardware:
+`configs/extend_rocm_pa_256k_gfx9.py` extends the reduction dispatch to 256k.
+Pending numeric verification (`docs/25` item 2).
 
 ---
 
