@@ -177,5 +177,37 @@ for N in 30 45 60; do
         --ctx-size 32768 -ub 2048 --flash-attn on -ngl 999 --n-cpu-moe "$N"
 done
 
+# ---------------------------------------------------------------------------
+# E8  The tier-4 hypothesis: the problem was never the bit width, it was 3 GiB.
+#
+# IQ3_XS is 139 GB and usable VRAM is 135.57 GB, so auto-fit left ~3 GiB on the
+# CPU -- and prefill collapsed to 181 t/s while decode stayed a healthy 8.5.
+# That asymmetry is the tell: a bandwidth limit would slow both. A small
+# CPU-resident fraction that every token must pass through slows prefill
+# specifically, because prefill pushes ALL prompt tokens through it.
+#
+# So the prediction is that dropping under the VRAM line matters far more than
+# the two bits of precision it costs. unsloth's UD-IQ2_M is 121.9 GB -- fits with
+# ~14 GB left for KV -- and its dynamic scheme keeps attention and shared experts
+# at higher precision while pushing only routed experts down, which is the right
+# place to lose bits on a MoE.
+#
+# Falsifiable: if prefill stays near 181 t/s, the CPU-residency explanation is
+# wrong and the cost is somewhere else entirely. Either way this is the decisive
+# experiment for the tier, and it is worth more than another point on the sweep.
+# ---------------------------------------------------------------------------
+banner "E8  GLM-4.6 UD-IQ2_M, fully GPU-resident (tests: prefill collapse is the 3 GiB)"
+# --include is mandatory here: the repo carries every quant from TQ1_0 to BF16,
+# which is several terabytes. Without it this pulls the lot.
+if [ ! -d "$MODELS/glm-gguf-ud-iq2m" ] || [ -z "$(ls -A "$MODELS/glm-gguf-ud-iq2m" 2>/dev/null)" ]; then
+    python3 "$BIN/fetch_model.py" unsloth/GLM-4.6-GGUF "$MODELS/glm-gguf-ud-iq2m" \
+        --include UD-IQ2_M --connections 1 --concurrent 8
+fi
+ARM_TIMEOUT=7200 READY_TIMEOUT=3600 \
+    "$BIN/run_arm.sh" glm46-udiq2m 400B ud_iq2_m llamacpp "$MODELS/glm-gguf-ud-iq2m" \
+    --ctx-size 32768 -ub 2048 --flash-attn on
+echo "--- did it fit? compare against IQ3_XS's 135.57 GB / 181 t/s prefill ---"
+grep -aE "offloaded|buffer size|CPU_Mapped" "$BASE/logs/glm46-udiq2m.serverlog" 2>/dev/null | head -10
+
 banner "round 2 complete"
 python3 "$BIN/summarize_results.py" "$BASE/results"
