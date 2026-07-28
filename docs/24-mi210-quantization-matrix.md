@@ -120,6 +120,30 @@ card lighter quantization buys bandwidth, not arithmetic.
 
 ---
 
+## Tier 2 — the 80B, and a comparison that has to be read carefully
+
+| Model | Quant | TP | Prefill @15k | Decode @~101k | KV |
+|---|---|---|---:|---:|---:|
+| 30B | w8a8 | 1 | **4,739 t/s** (3.20 s) | 33.8 t/s | 27.2 GiB |
+| 80B | awq-int4 | 1 | 4,487 t/s (3.39 s) | **45.9 t/s** | 10.4 GiB |
+| 80B | awq-int8 | **2** | **6,679 t/s** (2.27 s) | **51.3 t/s** | 14.9 GiB |
+
+**At equal hardware the 30B is slightly faster on prefill.** 4,739 against 4,487
+tok/s. The 80B's headline 6,679 tok/s needed a second card, so quoting it beside
+a TP=1 row compares two cards against one, not two models.
+
+**The decode win is real and architectural.** At the same TP=1, the 80B decodes
+**45.9 tok/s against the 30B's 33.8** — 36% faster on a model nearly three times
+larger, with a KV cache of 10.4 GiB against 27.2. Qwen3-Next is a 3:1 Gated
+DeltaNet hybrid, so only 12 of 48 layers store KV. At long context the KV cache
+sets decode throughput, and this is the one place where picking a bigger model
+makes serving *cheaper*.
+
+So the defensible tier-2 statements are narrower than "the 80B is faster":
+prefill is roughly a wash at equal hardware and favours the 30B slightly;
+long-context decode favours the 80B substantially; and the fastest absolute
+numbers in this matrix come from the 80B at TP=2.
+
 ## The three things that mattered more than the format
 
 ### 1. INT8 MoE was disabled on every AMD GPU by a CUDA check
