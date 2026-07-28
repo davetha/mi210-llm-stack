@@ -1,0 +1,92 @@
+{
+  "label": "t80-awq8",
+  "tier": "80B",
+  "quant": "awq-int8",
+  "engine": "vllm-aiter",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15237,
+  "ttft_s_median": 2.2691854600561783,
+  "ttft_s_min": 2.2584035869222134,
+  "ttft_s_max": 2.279062460991554,
+  "implied_prefill_tps_median": 6678.61142593886,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "word. Alright, that's straightforward. I should respond with exactly that. No other text. Got it.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      63364780032,
+      63303938048
+    ],
+    "total_gb": 126.67
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      63382388736,
+      63321554944
+    ],
+    "total_gb": 126.7
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 2.279062460991554,
+      "total_s": 2.3995048149954528,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "Okay, let's see. The user",
+      "usage": {
+        "prompt_tokens": 15237,
+        "total_tokens": 15245,
+        "completion_tokens": 8
+      },
+      "rep": 0,
+      "marker": "027e8305d2a34309960c22413c462457",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785216255.5550184,
+      "actual_prompt_tokens": 15237,
+      "implied_prefill_tps": 6685.643882428226,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 2.2584035869222134,
+      "total_s": 2.378801999031566,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "Okay, let's see. The user",
+      "usage": {
+        "prompt_tokens": 15083,
+        "total_tokens": 15091,
+        "completion_tokens": 8
+      },
+      "rep": 1,
+      "marker": "1b27599e8259489b9b0ad6f9bb27b84e",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785216257.956818,
+      "actual_prompt_tokens": 15083,
+      "implied_prefill_tps": 6678.61142593886,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 2.2691854600561783,
+      "total_s": 2.3896174130495638,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "Okay, let's see. The user",
+      "usage": {
+        "prompt_tokens": 15139,
+        "total_tokens": 15147,
+        "completion_tokens": 8
+      },
+      "rep": 2,
+      "marker": "c33c83e0ccf9495e9dc4a6df52ff3b82",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785216260.337867,
+      "actual_prompt_tokens": 15139,
+      "implied_prefill_tps": 6671.556938155775,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "label": "t35-gptq8",
+  "tier": "35B",
+  "quant": "gptq-int8",
+  "engine": "vllm-aiter",
+  "status": "FAILED",
+  "reason": "container exited during load",
+  "server_log_tail": "Error response from daemon: No such container: bench-t35-gptq8\n"
+}

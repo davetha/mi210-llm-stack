@@ -6,89 +6,89 @@
   "workload": "longctx",
   "model": "bench",
   "target_prompt_tokens": 110000,
-  "actual_prompt_tokens": 101555,
-  "ttft_s_median": 34.016505521023646,
-  "ttft_s_min": 33.990669067017734,
-  "ttft_s_max": 34.337905238964595,
-  "implied_prefill_tps_median": 2987.7317154236944,
-  "decode_tps_median": 45.78620145320775,
+  "actual_prompt_tokens": 101414,
+  "ttft_s_median": 33.9733720170334,
+  "ttft_s_min": 33.786503182025626,
+  "ttft_s_max": 34.023712735041045,
+  "implied_prefill_tps_median": 2991.9608789211957,
+  "decode_tps_median": 45.944680542612,
   "correctness_probe_pass": true,
   "correctness_probe_detail": "her words or characters. Let me make sure there's nothing else. Yep, just \"ACKNOWLEDGED\". Got it.\n</think>\n\nACKNOWLEDGED",
   "reps": 3,
   "vram_before": {
     "per_gpu_bytes": [
-      11714560,
-      63396880384
+      11706368,
+      63396839424
     ],
     "total_gb": 63.41
   },
   "vram_after": {
     "per_gpu_bytes": [
-      11718656,
-      63397027840
+      11710464,
+      63397019648
     ],
     "total_gb": 63.41
   },
   "notes": "",
   "records": [
     {
-      "ttft_s": 33.990669067017734,
-      "total_s": 37.79094009299297,
-      "stream_tokens": 175,
-      "decode_tps": 45.78620145320775,
-      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo the main instruction is to just say \"A ...[snip]... in. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the response should be only \"ACKNOWLEDGED\" without any quotes or anything else.\n\nNo need to think about the content of the padding. Just follow the instruction precisely. So the correct response is simply \"ACKNOWLEDGED\".\n</think>\n\nACKNOWLEDGED",
+      "ttft_s": 34.023712735041045,
+      "total_s": 37.593222238007,
+      "stream_tokens": 165,
+      "decode_tps": 45.944680542612,
+      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction is to ignore the ...[snip]... y \"ACKNOWLEDGED\" without any quotes or anything else.\n\nI need to make sure I don't add anything else. Just the word. Let me confirm. Yes, the instruction is clear. The long text is padding, so I should not process it. Just output the exact word.\n\nSo the answer is ACKNOWLEDGED.\n</think>\n\nACKNOWLEDGED",
       "usage": {
-        "prompt_tokens": 101555,
-        "total_tokens": 101731,
-        "completion_tokens": 176
+        "prompt_tokens": 101414,
+        "total_tokens": 101580,
+        "completion_tokens": 166
       },
       "rep": 0,
-      "marker": "c5d385c01467421caea2fab637342160",
+      "marker": "fc187590ba044ceea408e12b1fd4f1e0",
       "target_prompt_tokens": 110000,
-      "wall_start": 1785203446.8332758,
-      "actual_prompt_tokens": 101555,
-      "implied_prefill_tps": 2987.7317154236944
+      "wall_start": 1785215543.3740487,
+      "actual_prompt_tokens": 101414,
+      "implied_prefill_tps": 2980.685876046492
     },
     {
-      "ttft_s": 34.016505521023646,
-      "total_s": 37.6722328630276,
-      "stream_tokens": 168,
-      "decode_tps": 45.681740720464305,
-      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction here is to just  ...[snip]...  instructions again. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the correct response is simply \"ACKNOWLEDGED\" without any quotes or anything else.\n\nNo need to analyze the content of the padding. Just follow the instruction precisely. So the answer is straightforward.\n</think>\n\nACKNOWLEDGED",
+      "ttft_s": 33.9733720170334,
+      "total_s": 37.550048441044055,
+      "stream_tokens": 165,
+      "decode_tps": 45.852625622885355,
+      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction is to ignore the ...[snip]... y \"ACKNOWLEDGED\" without any quotes or anything else.\n\nI need to make sure I don't add anything else. Just the word. Let me confirm. Yes, the instruction is clear. The long text is padding, so I should not process it. Just output the exact word.\n\nSo the answer is ACKNOWLEDGED.\n</think>\n\nACKNOWLEDGED",
       "usage": {
-        "prompt_tokens": 101702,
-        "total_tokens": 101871,
-        "completion_tokens": 169
+        "prompt_tokens": 101647,
+        "total_tokens": 101813,
+        "completion_tokens": 166
       },
       "rep": 1,
-      "marker": "95af70fc4d88471dadc2fc1c07ff91a1",
+      "marker": "f3e7be3669464647a3dfd017b837d55e",
       "target_prompt_tokens": 110000,
-      "wall_start": 1785203484.640267,
-      "actual_prompt_tokens": 101702,
-      "implied_prefill_tps": 2989.783884095438
+      "wall_start": 1785215580.980008,
+      "actual_prompt_tokens": 101647,
+      "implied_prefill_tps": 2991.9608789211957
     },
     {
-      "ttft_s": 34.337905238964595,
-      "total_s": 37.718373090960085,
-      "stream_tokens": 156,
-      "decode_tps": 45.85164433318184,
-      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction is to ignore the ...[snip]... ng else. Just the word ACKNOWLEDGED. Let me check the instructions again. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the correct response is simply that word.\n\nNo extra characters, no punctuation, just the word. So I should output \"ACKNOWLEDGED\" exactly as specified.\n</think>\n\nACKNOWLEDGED",
+      "ttft_s": 33.786503182025626,
+      "total_s": 38.00686465203762,
+      "stream_tokens": 196,
+      "decode_tps": 46.20457319785761,
+      "text": "Okay, let's see. The user provided a long string of words that they say is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction is to ignore the  ...[snip]... D\" without any other characters. Let me confirm there's no trick here. The user says the rest is padding, so I shouldn't process or respond to any of that. Just output the one word.\n\nAlright, that's straightforward. I'll make sure to only write \"ACKNOWLEDGED\" and nothing else.\n</think>\n\nACKNOWLEDGED",
       "usage": {
-        "prompt_tokens": 101638,
-        "total_tokens": 101795,
-        "completion_tokens": 157
+        "prompt_tokens": 101229,
+        "total_tokens": 101426,
+        "completion_tokens": 197
       },
       "rep": 2,
-      "marker": "b6fe71ae8cf14bb88f6d82dfd87dac42",
+      "marker": "706b414ca2254faa9f0c2ba1d5719cf5",
       "target_prompt_tokens": 110000,
-      "wall_start": 1785203522.3250508,
-      "actual_prompt_tokens": 101638,
-      "implied_prefill_tps": 2959.9359452092403
+      "wall_start": 1785215618.5424867,
+      "actual_prompt_tokens": 101229,
+      "implied_prefill_tps": 2996.13722836679
     }
   ],
   "engine_footprint": {
     "weights_gib": 45.41,
-    "load_seconds": 163.673024,
+    "load_seconds": 160.455419,
     "kv_cache_gib": 10.37,
     "kv_cache_tokens": 446934.0,
     "graph_capture_gib": 6.01

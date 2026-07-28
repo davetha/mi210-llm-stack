@@ -1,0 +1,9 @@
+{
+  "label": "t235-gptq4",
+  "tier": "235B",
+  "quant": "gptq-int4",
+  "engine": "vllm-aiter",
+  "status": "FAILED",
+  "reason": "container exited during load",
+  "server_log_tail": "Error response from daemon: No such container: bench-t235-gptq4\n"
+}
