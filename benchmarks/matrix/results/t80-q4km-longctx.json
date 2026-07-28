@@ -1,0 +1,98 @@
+{
+  "label": "t80-q4km",
+  "tier": "80B",
+  "quant": "q4_k_m",
+  "engine": "llamacpp",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 250000,
+  "actual_prompt_tokens": 230475,
+  "ttft_s_median": 143.00510105397552,
+  "ttft_s_min": 141.49319588800427,
+  "ttft_s_max": 143.15057962108403,
+  "implied_prefill_tps_median": 1611.655796201354,
+  "decode_tps_median": 53.8355050773011,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "Yep, that's the word. Just reply with ACKNOWLEDGED. No need to think further. Just output that single word.\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      32120717312,
+      33746022400
+    ],
+    "total_gb": 65.87
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      32129396736,
+      33752690688
+    ],
+    "total_gb": 65.88
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 143.00510105397552,
+      "total_s": 146.60668641200755,
+      "stream_tokens": 195,
+      "decode_tps": 53.86516939274597,
+      "text": "Okay, let's see. The user provided a huge block of text that's supposed to be padding, and they want me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nFirst, I need to check the instructions again.  ...[snip]...  but the user clearly states to ignore the padding and reply with exactly one word: ACKNOWLEDGED.\n\nSo the correct response is simply \"ACKNOWLEDGED\" without any quotes or additional characters. Just the word.\n\nYes, that's straightforward. No need to overcomplicate. Just output that word.\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 198,
+        "prompt_tokens": 230475,
+        "total_tokens": 230673,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 0,
+      "marker": "dacd1b7ff2304bcc8c67a580379bbe83",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785203796.4456353,
+      "actual_prompt_tokens": 230475,
+      "implied_prefill_tps": 1611.655796201354
+    },
+    {
+      "ttft_s": 143.15057962108403,
+      "total_s": 145.44705398206133,
+      "stream_tokens": 123,
+      "decode_tps": 53.124912955680756,
+      "text": "Okay, let's see. The user provided a huge block of text that's supposed to be padding, and they want me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nFirst, I need to check if there's any hidden in ...[snip]... the text is padding and to ignore it. So the correct response is just \"ACKNOWLEDGED\" without any other words.\n\nI should make sure not to add anything else. No explanations, no extra characters. Just the single word.\n\nYes, the instruction is clear. So the answer is simply \"ACKNOWLEDGED\".\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 126,
+        "prompt_tokens": 230598,
+        "total_tokens": 230724,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 1,
+      "marker": "ac85aaa4d21541f2804d3cfac34f5b0f",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785203943.0807502,
+      "actual_prompt_tokens": 230598,
+      "implied_prefill_tps": 1610.8771659212773
+    },
+    {
+      "ttft_s": 141.49319588800427,
+      "total_s": 145.07819045090582,
+      "stream_tokens": 194,
+      "decode_tps": 53.8355050773011,
+      "text": "Okay, let's see. The user provided a huge block of text that's supposed to be padding, and they want me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nFirst, I need to check the instructions again.  ...[snip]...  but the user clearly states to ignore the padding and reply with exactly one word: ACKNOWLEDGED.\n\nSo the correct response is simply \"ACKNOWLEDGED\" without any quotes or additional characters. Just the word.\n\nYes, that's straightforward. No need to overcomplicate. Just output that word.\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 197,
+        "prompt_tokens": 230560,
+        "total_tokens": 230757,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 2,
+      "marker": "eb40140fb8f447f0b2aeb565227de082",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785204088.5556848,
+      "actual_prompt_tokens": 230560,
+      "implied_prefill_tps": 1629.4776476919394
+    }
+  ]
+}
