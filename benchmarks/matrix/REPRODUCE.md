@@ -162,6 +162,27 @@ Fixed settings across all runs: `--seed 1234`, `temperature 0`,
 `--no-enable-prefix-caching`. llama.cpp uses `-ub 2048` (measured optimum;
 4096 and 8192 are both worse) and does **not** quantize the KV cache.
 
+## Known-benign warnings
+
+These appear on every run and are **not** problems:
+
+```
+ERROR [config.py:29] Failed to import Triton kernels. Please make sure your
+triton version is compatible. Error: No module named 'triton_kernels.matmul_ogs'
+```
+
+A side-effect of reinstalling `triton==3.7.1` (required — 3.7.0 segfaults on
+`import aiter`), which drops the separate `triton_kernels` companion package.
+It gates the **mxfp4** path only, which nothing here uses. It is logged at ERROR
+level, appears five times at startup, and is harmless: the W8A8 arm that
+produced the fastest result in the matrix logged it too.
+
+```
+[aiter] Current hipcc not support: -mllvm -amdgpu-coerce-illegal-types=1, skip it
+```
+
+AITER probing for a compiler flag this hipcc lacks, then proceeding without it.
+
 ## Things that silently invalidate a run
 
 Each of these produced a wrong number in this project before being caught.
