@@ -130,8 +130,12 @@ _PY_NEW = (
 )
 
 
+def already_patched(text: str) -> bool:
+    return "PATCHED (mi210-llm-stack)" in text
+
+
 def patch_cu(text: str) -> str:
-    if "PATCHED (mi210-llm-stack)" in text:
+    if already_patched(text):
         raise SystemExit("attention.cu already patched -- refusing to double-apply")
     if _CU_ANCHOR not in text:
         raise SystemExit(
@@ -154,13 +158,20 @@ def patch_cu(text: str) -> str:
 def patch_py(text: str) -> str:
     if "PATCHED (mi210-llm-stack)" in text:
         raise SystemExit("rocm.py already patched -- refusing to double-apply")
-    if text.count(_PY_OLD) != 2:
+    # Both branches contain `max_seq_len <= 128 * 1024`, but only the gfx9 one
+    # is followed immediately by `and sinks is None` -- gfx1x interposes
+    # `alibi_slopes` and `kv_cache_dtype` checks first. So this two-line anchor
+    # already selects gfx9 uniquely, and the count assertion is what proves it
+    # rather than a positional `replace(..., 1)` that would silently pick the
+    # wrong branch if upstream reordered the terms.
+    n = text.count(_PY_OLD)
+    if n != 1:
         raise SystemExit(
-            f"expected exactly 2 occurrences of the 128k term in rocm.py "
-            f"(gfx9 and gfx1x), found {text.count(_PY_OLD)}"
+            f"expected the gfx9 128k anchor exactly once in rocm.py, found {n}. "
+            "Upstream reordered the gate terms; re-read both branches before "
+            "forcing this -- patching the gfx1x branch would turn a working "
+            "fallback into a TORCH_CHECK abort."
         )
-    # Replace the FIRST only: that is the _ON_GFX9 branch. The _ON_GFX1X branch
-    # keeps its 128k ceiling because its kernel really does stop there.
     return text.replace(_PY_OLD, _PY_NEW, 1)
 
 
@@ -199,11 +210,20 @@ def main() -> int:
             print(f"{state:8} {p}")
         return 0
 
-    cu.write_text(patch_cu(cu.read_text()))
-    print(f"patched {cu}  (reduction switch -> npar_loops 16, 256K)")
+    # Patch each file independently. They are separate halves -- the switch and
+    # the gate -- and a rerun after one succeeded should finish the job rather
+    # than abort on the half already done.
+    if already_patched(cu.read_text()):
+        print(f"already patched {cu}")
+    else:
+        cu.write_text(patch_cu(cu.read_text()))
+        print(f"patched {cu}  (reduction switch -> npar_loops 16, 256K)")
 
-    py.write_text(patch_py(py.read_text()))
-    print(f"patched {py}  (gfx9 gate -> 256 * 1024; gfx1x left at 128k)")
+    if already_patched(py.read_text()):
+        print(f"already patched {py}")
+    else:
+        py.write_text(patch_py(py.read_text()))
+        print(f"patched {py}  (gfx9 gate -> 256 * 1024; gfx1x left at 128k)")
 
     print("\nREBUILD the ROCm extension, then run tests/test_rocm_pa_256k.py.")
     print("A throughput win with no numeric check is NOT an acceptance signal.")
