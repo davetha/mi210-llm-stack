@@ -88,5 +88,12 @@
       "implied_prefill_tps": 6671.556938155775,
       "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
     }
-  ]
+  ],
+  "engine_footprint": {
+    "weights_gib": 40.95,
+    "load_seconds": 183.650792,
+    "kv_cache_gib": 14.86,
+    "kv_cache_tokens": 1282249.0,
+    "graph_capture_gib": 5.58
+  }
 }
