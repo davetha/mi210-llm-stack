@@ -402,19 +402,61 @@ nothing in the prompt to speculate from. That was stated in the script before th
 run, and the result is consistent with it. It says "not helped by this workload",
 not "does not work".
 
-**The MTP rows are the surprising ones and do not have that excuse.** Counting
-from 1 to 60 is about as predictable as generation gets, so acceptance should be
-high, and more speculative tokens should help rather than hurt. Getting *worse*
-at 2 tokens than at 1 points at per-step overhead dominating whatever acceptance
-buys — plausibly the same untuned-MoE-kernel problem that makes W8A8 lose decode
-twice over (`docs/24`), since each speculative step runs the MoE again.
+### Why it hurt: sparse MoE breaks speculation's core assumption
 
-**Not closed, but demoted.** Worth one re-test after the MI210 `fused_moe` config
-is in place, because if speculation is being taxed by an untuned expert GEMM then
-tuning changes the sign. Until then, do not enable it here.
+**The draft was not the problem.** vLLM's own metrics on the MTP run:
 
-**Confidence: high** that it hurts as currently configured, **low** that this
-generalises past this hardware and this prompt shape.
+```
+Mean acceptance length: 1.89 (of a possible 2)
+Per-position acceptance rate: 0.891
+Avg Draft acceptance rate: 84.8% - 89.1%
+```
+
+Speculation was working *well*. So the loss is in verification cost — and that
+is where the assumption breaks.
+
+Speculative decoding pays off because verifying N+1 tokens is supposed to cost
+about what decoding 1 costs: decode is memory-bound, you read all the weights
+either way, so the extra positions ride along free. **That holds for dense
+models. It fails for sparse MoE.**
+
+Qwen3-Next-80B routes **10 of 512 experts** per token, and adjacent tokens route
+near-independently:
+
+| positions verified | distinct experts | expert weight traffic |
+|---:|---:|---:|
+| 1 | 10.0 | 1.00× |
+| 2 | 19.8 | **1.98×** |
+| 3 | 29.4 | **2.94×** |
+
+So the arithmetic:
+
+| | |
+|---|---:|
+| ideal speedup from acceptance length | 1.86× |
+| penalty from expert weight traffic | 1.98× |
+| **predicted net** | **0.94×** |
+| **observed** (43.09 / 51.34) | **0.84×** |
+| residual — the MTP head's own forward pass | 1.12× |
+
+**The model accounts for the result.** It also explains why 2 speculative tokens
+were worse than 1 (2.94× traffic against at most 3× acceptance) and why prefill
+dropped as well.
+
+**The honest ceiling: tuning cannot make this positive on this model.** Best case
+at 2 positions is ~0.94×. What tuning *can* recover is the gap between 0.84 and
+0.94 — the untuned expert GEMM at batch 2–3. Worth doing anyway, because the
+MI210 config produced so far covers **batch size 1 only**, and those same small-
+batch shapes are the leading suspect for W8A8 losing decode twice over
+(`docs/24`) — which matters far more than speculation does.
+
+**The decisive follow-up is a dense model.** Llama-3.3-70B W8A8 verifies 2 tokens
+against the *same* weights read once, so the 1.98× penalty does not exist and
+speculation should help. `round6_spec_dense.sh` D1 runs it. If speculation loses
+there too, this whole explanation is wrong and the cost is elsewhere.
+
+**Confidence: high** on the mechanism (acceptance measured, arithmetic matches),
+**high** that it hurts on sparse MoE, **untested** on dense.
 
 ---
 
