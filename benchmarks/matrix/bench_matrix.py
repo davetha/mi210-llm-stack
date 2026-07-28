@@ -275,6 +275,34 @@ def probe_correctness(url, model, timeout):
     return ok, r["text"][-120:]
 
 
+def warmup(url, model, target_tokens, timeout):
+    """One discarded request at the real shape, to absorb first-use costs.
+
+    The first request against a fresh server pays for Triton JIT compilation of
+    the MoE and attention kernels, and any deferred graph capture. Measured on
+    an 80B MoE: first request 124.8 s, subsequent requests 3.4 s at the same
+    shape -- a 37x difference that is warmup, not throughput.
+
+    Without this, that first rep either poisons the mean or, worse, trips the
+    cold-cache assertion below: "first is slow because of JIT" and "later ones
+    are fast because of prefix caching" look identical from the outside. The
+    harness previously reported the former as the latter and voided a run that
+    was fine.
+
+    Warmup uses the same prompt length as the timed reps, because kernel
+    selection is shape-dependent -- warming at 16 tokens does not compile the
+    kernels a 16k prompt will use. It gets its own UUID like every other
+    prompt, so it cannot seed a prefix cache for the timed reps.
+    """
+    try:
+        stream_request(url, model, build_prompt(target_tokens, uuid.uuid4().hex),
+                       8, timeout)
+    except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
+        # A warmup failure is not fatal on its own; the timed reps will fail
+        # too and report properly. Say so rather than swallowing it.
+        print(f"  warmup request failed ({exc}) -- continuing to timed reps")
+
+
 def run_workload(args):
     reps = args.reps
     target = args.prompt_tokens
@@ -338,6 +366,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--verify-cold", action="store_true", default=True)
     ap.add_argument("--no-verify-cold", dest="verify_cold", action="store_false")
+    ap.add_argument("--no-warmup", action="store_true",
+                    help="skip the discarded warmup request. Only for measuring "
+                         "first-request cost deliberately -- otherwise JIT "
+                         "compilation lands in rep 0 and trips --verify-cold.")
     ap.add_argument("--vram-cmd", default=None,
                     help="shell command printing VRAM bytes-used per GPU")
     ap.add_argument("--engine", default="unknown", help="vllm | llamacpp")
@@ -365,6 +397,15 @@ def main():
     # before (docs 16 and 17) precisely because nothing checked.
     probe_ok, probe_detail = probe_correctness(args.url, args.model, args.timeout)
     print(f"  correctness probe: {'PASS' if probe_ok else 'FAIL'}  ({probe_detail!r})")
+
+    # Absorb first-use JIT/graph-capture cost at the real prompt shape before
+    # timing anything. See warmup() -- without it, an 80B MoE's 124.8 s first
+    # request against 3.4 s steady state trips the cold-cache assertion.
+    if not args.no_warmup:
+        print(f"  warmup ({args.prompt_tokens} tok, discarded)...", flush=True)
+        t_warm = time.perf_counter()
+        warmup(args.url, args.model, args.prompt_tokens, args.timeout)
+        print(f"  warmup took {time.perf_counter() - t_warm:.1f}s")
 
     records = run_workload(args)
     vram_after = read_vram(args.vram_cmd)
