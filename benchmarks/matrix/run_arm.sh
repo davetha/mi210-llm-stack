@@ -99,7 +99,11 @@ for wl in cold16k longctx; do
     if [ "$wl" = "longctx" ] && [ -n "${LONGCTX_TOKENS:-}" ]; then
         extra=(--prompt-tokens "$LONGCTX_TOKENS")
     fi
-    python3 "$BIN/bench_matrix.py" \
+    # -u: unbuffered. Piping through tee makes stdout a pipe rather than a
+    # tty, so Python block-buffers it and a long arm shows NOTHING until the
+    # buffer fills or the process exits -- on a 357B model that is 20+ minutes
+    # of apparent silence that reads exactly like a hang.
+    python3 -u "$BIN/bench_matrix.py" \
         --url "http://127.0.0.1:$PORT" --model bench \
         --label "$LABEL" --workload "$wl" \
         --tier "$TIER" --quant "$QUANT" --engine "$ENGINE" \
