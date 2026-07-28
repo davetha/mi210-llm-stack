@@ -209,5 +209,35 @@ ARM_TIMEOUT=7200 READY_TIMEOUT=3600 \
 echo "--- did it fit? compare against IQ3_XS's 135.57 GB / 181 t/s prefill ---"
 grep -aE "offloaded|buffer size|CPU_Mapped" "$BASE/logs/glm46-udiq2m.serverlog" 2>/dev/null | head -10
 
+# ---------------------------------------------------------------------------
+# E9  The payoff for the 256k patch: does the decode cliff actually go away?
+#
+# docs/23 measured the cliff at 10x, and the matrix has the concrete number:
+# 30B AWQ at --max-model-len 262144 decodes 0.7485 t/s at 241k, reproducibly
+# (two reps, 0.7468 / 0.7502). Configured at 131072 the same engine does 33.8
+# t/s at 101k. The gap is the Triton fallback baked in at graph capture.
+#
+# configs/extend_rocm_pa_256k_gfx9.py extends the reduction dispatch to
+# npar_loops=16, and tests/test_rocm_pa_256k.py has VERIFIED the numerics --
+# custom vs Triton, 4-7e-3 at 139k/196k/262k, with the control identical on both
+# builds and the 266k ceiling still declining. So a throughput number from this
+# build is now meaningful rather than a faster wrong answer.
+#
+# Same model, same flags, same 262144 config as the 0.7485 t/s row. The only
+# variable is the image. Anything near 0.75 means the patch did not reach the
+# decode path; anything near 30 means the cliff is gone.
+# ---------------------------------------------------------------------------
+banner "E9  256k decode cliff, patched build (baseline to beat: 0.7485 t/s @ 241k)"
+if docker image inspect rocm-vllm-aiter-gfx90a:pa256k >/dev/null 2>&1; then
+    # run_arm reads the image from serve_vllm_aiter.sh; VLLM_IMAGE overrides it.
+    VLLM_IMAGE=rocm-vllm-aiter-gfx90a:pa256k \
+    ARM_TIMEOUT=7200 LONGCTX_TOKENS=262144 \
+        "$BIN/run_arm.sh" t35-awq-256k-patched 35B awq vllm-aiter "$BASE/t35-awq" \
+        --max-model-len 262144 --no-enable-prefix-caching
+    echo "--- compare: stock at this config decoded 0.7485 t/s at 241,583 tokens ---"
+else
+    echo "E9 skipped: rocm-vllm-aiter-gfx90a:pa256k not built"
+fi
+
 banner "round 2 complete"
 python3 "$BIN/summarize_results.py" "$BASE/results"

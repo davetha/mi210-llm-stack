@@ -202,20 +202,49 @@ launcher only and raises that branch's gate to `256 * 1024`. The RDNA branch is
 deliberately left at 128k, where its kernel genuinely stops. Verified to apply
 cleanly against upstream `attention.cu`; requires rebuilding the ROCm extension.
 
-**What remains unverified: numerics above 128k.** The instantiation is valid and
-the buffers are sized correctly, but that is an argument, not a measurement.
-`tests/test_rocm_pa_256k.py` is the acceptance criterion — it compares the custom
-kernel against an fp32 dense reference at 131k/139k/196k/262k and asserts that
-266k is *still refused*. The 139,264 case (`npar_loops = 9`) is the load-bearing
-one: it is the first length that requires the patch, so a reduction that silently
-ignores the extra groups shows up there as an order-1 error.
+### Numerics: VERIFIED
 
-Do not report a throughput number from a patched build until that test passes.
-`docs/14` is the cautionary case — a kernel that ran at full speed and computed
-the wrong thing.
+`tests/test_rocm_pa_256k.py` compares the custom kernel against Triton — the
+fallback it replaces — both driven through the real
+`chunked_prefill_paged_decode` entry point, with an explicit assertion that the
+gate *selected* the custom path before any comparison is made.
 
-**Confidence: high** on the mechanism and the patch, **unmeasured** on numerics
-and on the actual decode win.
+| seq_len | `npar_loops` | stock build | patched build |
+|---:|---:|---|---|
+| 131,072 | 8 | **PASS** `rel_err 6.62e-03` | **PASS** `rel_err 6.62e-03` |
+| 139,264 | 9 | FAIL — gate declined | **PASS** `4.15e-03` |
+| 196,608 | 12 | FAIL — gate declined | **PASS** `4.26e-03` |
+| 262,144 | 16 | FAIL — gate declined | **PASS** `5.29e-03` |
+| 266,240 | 17 | PASS — declined | **PASS — still declined** |
+
+Three things this establishes, none of which the argument above could:
+
+1. **The control is identical on both builds** (`6.62e-03`), so the patch does
+   not perturb the path that already worked.
+2. **The test discriminates.** Run against stock, exactly the three patched
+   lengths fail. A test that passed on both builds would be measuring nothing.
+3. **The ceiling still exists.** 266,240 is declined on the patched build too,
+   so the guard was extended rather than removed — which was the dangerous
+   outcome, since it would have passed every other case.
+
+Errors of 4–7e-3 are bf16 rounding between two independent kernels, not drift;
+a dropped partition group is an order-1 error and would be unmissable.
+
+Two test-design notes worth keeping, both learned by getting it wrong first:
+
+- **A hand-written fp32 reference was the wrong choice.** It disagreed at every
+  length *including `npar_loops = 1`*, because the KV layout is 5-D K
+  `[blocks, kv_heads, head_size/x, block_size, x]` and 4-D V — which is **not**
+  what `RocmAttentionBackend.get_kv_cache_shape` declares. Comparing two kernels
+  that consume the same tensors removes that whole class of error.
+- **The gate assertion is load-bearing.** Without it the test has a silent-pass
+  mode: if the gate declines, both arms run Triton, agree perfectly, and a
+  broken patch looks flawless. That is the `ROCM_AITER_FA` failure again —
+  backend admitted, never chosen, credited anyway.
+
+**Confidence: high** on the mechanism, the patch, and the numerics.
+**Still unmeasured: the actual decode win.** Build tagged
+`rocm-vllm-aiter-gfx90a:pa256k`.
 
 ---
 

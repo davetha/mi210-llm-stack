@@ -3,7 +3,11 @@
 # the patched image, with the AITER attention flags on.
 set -euo pipefail
 MODEL_DIR="${1:?}"; NAME="${2:?}"; PORT="${3:?}"; shift 3
-IMAGE="rocm-vllm-aiter-gfx90a:latest"
+# Overridable so an arm can A/B a patched build against the default without a
+# second copy of this script. Hardcoding it meant round2's E9 would have quietly
+# benchmarked the stock image while reporting a patched result -- the same shape
+# of error as crediting AITER for a run that never loaded its kernels.
+IMAGE="${VLLM_IMAGE:-rocm-vllm-aiter-gfx90a:latest}"
 H=/mnt/llm-storage
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" \
