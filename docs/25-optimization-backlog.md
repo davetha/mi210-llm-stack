@@ -15,6 +15,47 @@ Ordered by expected value, not by effort.
 697 s/shard and Qwen3-235B GPTQ-Int4 takes 810 s/shard, while the same files
 read at 3.0 GB/s under `dd`. `py-spy` put every sample in `_load_w13`.
 
+### The decisive comparison: same model, same TP, same box, 207×
+
+Round 2 produced the control this investigation needed for weeks. Load rates
+across every arm, normalised per byte:
+
+| arm | TP | GiB/rank | load (s) | **GiB/s** |
+|---|---:|---:|---:|---:|
+| t80-w8a8 (MoE, compressed-tensors) | 2 | 38.31 | 142.8 | **0.2683** |
+| **t35-w8a8-tp2** (MoE, compressed-tensors) | **2** | 14.66 | **59.7** | **0.2455** |
+| t35-w8a8 (MoE, compressed-tensors) | 1 | 29.17 | 122.8 | 0.2376 |
+| t70-w8a8 (**dense**, compressed-tensors) | 2 | 33.88 | 420.5 | 0.0806 |
+| **t35-bf16** (MoE, no quant config) | **2** | 28.51 | **12,365.8** | **0.0023** |
+
+**The same 30B model at the same TP=2 loads in 59.7 s as W8A8 and 12,365.8 s as
+bf16 — 207×.** Per byte it is 107× slower.
+
+This eliminates every remaining structural explanation in one shot:
+
+- **Not TP=2.** The TP=2 W8A8 arm is the *fastest* loader in the entire table.
+- **Not the model.** Same architecture, same expert count, same files on disk.
+- **Not model size.** bf16 moves *fewer* GiB per rank than the 80B arm that
+  loads in 143 s.
+- **Not storage, filesystem, or prefetch.** Already established, and now
+  doubly so — the fast arms read from the same btrfs volume.
+
+**It is the bf16 code path specifically.** `compressed-tensors` checkpoints
+route through a different weight loader and never enter the path where
+`py-spy --native` finds `hsakmt_ioctl`. Whatever the ioctl storm is,
+compressed-tensors sidesteps it completely.
+
+One secondary observation worth keeping: the **dense** compressed-tensors arm
+(t70) runs at 0.0806 GiB/s, ~3× slower per byte than the MoE compressed-tensors
+arms. That is a much smaller effect and a separate question — it does not go
+through `_load_w13` at all, having no experts — but it says the fast path is not
+uniformly fast either.
+
+**Practical consequence, and it is the actionable one:** bf16 is the fastest
+*inference* configuration measured at TP=2, and it costs **3.4 hours to load
+against 60 seconds**. For anything that restarts more than about twice a month,
+that trade is not close. `docs/26` treats this as a selection rule.
+
 ### Storage is definitively not the bottleneck
 
 Worth stating flatly, because this repo got it wrong once — an early diagnosis

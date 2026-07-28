@@ -52,14 +52,34 @@ in the same place. The bf16 arm then gets 2.07× the KV tokens because it has tw
 cards' worth of KV, and roughly 1.6× prefill / 1.85× decode, which is about what
 doubling the hardware should buy.
 
-So the defensible reading is not "bf16 beats W8A8". It is:
+### E0 ran, and it changes the headline
 
-> **W8A8 delivers a comparable per-card footprint on half the hardware, and
-> loads 100× faster** (123 s against 3.4 hours).
+The TP=2 W8A8 control is in. At **equal hardware**:
 
-Whether W8A8 *also* wins at equal TP is not answerable from this table — no
-W8A8 arm has run at TP=2. `benchmarks/matrix/round2.sh` E0 is exactly that arm,
-and it is the control this matrix should have had from the start.
+| 30B, TP=2 | TTFT | Prefill | Decode @101k | Load |
+|---|---:|---:|---:|---:|
+| **bf16** | **2.03 s** | **7,578 t/s** | **62.6 t/s** | 12,366 s |
+| W8A8 | 2.08 s | 7,278 t/s | 43.4 t/s | **59.7 s** |
+
+**bf16 wins on throughput at equal TP** — 4% on prefill and **44% on decode**.
+So "INT8 W8A8 is the fastest format" was an artifact of bf16 being unable to fit
+on one card, not a property of the arithmetic.
+
+The decode gap is the surprising half and is worth flagging as unexplained:
+INT8 halves weight-memory traffic, so it should *win* a bandwidth-bound decode.
+Losing by 44% points at the Triton INT8 MoE kernel being poorly tuned at
+batch-1 decode shapes rather than at anything architectural — consistent with
+`docs/25` item 4, where vLLM ships tuned `fused_moe` configs for MI300X/MI325X
+and none for MI210. Not yet measured.
+
+**But the load times invert the recommendation completely:**
+
+> At TP=2, bf16 buys **+4% prefill and +44% decode** for **207× the load time**
+> — 3.4 hours against 60 seconds, same model, same cards, same day.
+
+For a server that restarts more than about twice a month, that is not a close
+call. And W8A8 remains the only one of the two that runs at all on a single
+card. Load-path analysis in `docs/25` item 1.
 
 The 3.4-hour load is its own finding, and it is not I/O: see `docs/25` item 1,
 where `py-spy --native` puts the loader in `hsakmt_ioctl`.

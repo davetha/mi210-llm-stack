@@ -71,12 +71,25 @@ TOKENS_PER_WORD = 1.5
 MIN_TOKENS_FOR_DECODE_RATE = 32
 
 
-def build_prompt(target_tokens, marker):
+def build_prompt(target_tokens, marker, want_long_output=False):
     """Unique filler of roughly `target_tokens`, with the uniqueness FIRST.
 
     The UUID must lead. A unique *suffix* would still share a cacheable prefix
     with every other prompt of the same length, which is exactly the failure
     this is meant to prevent.
+
+    `want_long_output` asks for a deterministic multi-token answer instead of a
+    single word. This exists because the one-word instruction made the decode
+    rate **accidentally dependent on the model being a reasoning model**:
+    Qwen3-Next-80B-*Thinking* padded its reply with ~170 tokens of visible
+    reasoning and produced a decode number, while the *Instruct* build of the
+    same architecture answered in 3 tokens and got `decode_tps: null` --
+    suppressed by MIN_TOKENS_FOR_DECODE_RATE, correctly, but leaving a hole in
+    exactly the W8A8-vs-W8A16 comparison the arm existed to make.
+
+    Counting is used rather than free generation because the output length is
+    then fixed by the instruction rather than by the model's verbosity, so the
+    decode rate is comparable across model families.
     """
     nwords = max(1, int(target_tokens / TOKENS_PER_WORD))
     state = int(marker, 16)
@@ -84,11 +97,17 @@ def build_prompt(target_tokens, marker):
     for _ in range(nwords):
         state = (state * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
         body.append(WORDS[(state >> 33) % len(WORDS)])
-    return (
-        f"session {marker}\n" + " ".join(body) +
-        "\n\nThe text above is padding; ignore it. "
-        "Reply with exactly one word: ACKNOWLEDGED"
-    )
+    if want_long_output:
+        instruction = (
+            "The text above is padding; ignore it. "
+            "Count from 1 to 60, one number per line, and nothing else."
+        )
+    else:
+        instruction = (
+            "The text above is padding; ignore it. "
+            "Reply with exactly one word: ACKNOWLEDGED"
+        )
+    return f"session {marker}\n" + " ".join(body) + "\n\n" + instruction
 
 
 def stream_request(url, model, prompt, max_tokens, timeout, extra=None):
@@ -329,7 +348,11 @@ def run_workload(args):
 
     for i in range(reps):
         marker = uuid.uuid4().hex
-        prompt = build_prompt(target, marker)
+        # Ask for a long answer only when this rep is actually going to measure
+        # decode. On the TTFT workload max_tokens is 8, so a counting prompt
+        # would be truncated and buy nothing.
+        prompt = build_prompt(target, marker,
+                              want_long_output=args.max_tokens >= MIN_TOKENS_FOR_DECODE_RATE)
         t_start = time.time()
         r = stream_request(args.url, args.model, prompt, args.max_tokens,
                            args.timeout)
