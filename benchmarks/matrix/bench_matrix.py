@@ -123,8 +123,23 @@ def stream_request(url, model, prompt, max_tokens, timeout, extra=None):
     text = []
     usage = None
 
+    # `timeout` here is urllib's PER-SOCKET-OPERATION timeout, not a deadline
+    # for the whole request. Passing the full budget (3600 s) means a single
+    # read that never returns blocks for an hour.
+    #
+    # Observed on the 357B GLM arm: the server logged the request as
+    # "200 OK" and went idle at 0% GPU with 0 running requests, while the
+    # client sat in poll_schedule_timeout accumulating zero CPU for 17
+    # minutes -- the stream ended without the parser seeing `[DONE]`, and
+    # HTTP keep-alive left the connection open with nothing more to send.
+    #
+    # A per-read cap bounds that. It has to be generous enough for a genuine
+    # long prefill, where the gap before the first token IS the measurement:
+    # 230k tokens took 346 s on llama.cpp, so the floor is minutes, not
+    # seconds.
+    read_timeout = min(timeout, max(600, timeout // 4))
     try:
-        resp_cm = urllib.request.urlopen(req, timeout=timeout)
+        resp_cm = urllib.request.urlopen(req, timeout=read_timeout)
     except urllib.error.HTTPError as exc:
         # Surface the server's own explanation. Without this the failure is a
         # bare "HTTP Error 400: Bad Request" with no hint, and the actual cause
@@ -294,10 +309,14 @@ def warmup(url, model, target_tokens, timeout):
     kernels a 16k prompt will use. It gets its own UUID like every other
     prompt, so it cannot seed a prefix cache for the timed reps.
     """
+    # Warmup gets its own, tighter budget. It is not a measurement, so there is
+    # no reason to let it consume the full per-arm timeout -- and a warmup that
+    # runs for tens of minutes means something is wrong, not that the model is
+    # large. Capped at 15 minutes or the arm's own timeout, whichever is less.
     try:
         stream_request(url, model, build_prompt(target_tokens, uuid.uuid4().hex),
-                       8, timeout)
-    except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
+                       8, min(timeout, 900))
+    except (urllib.error.URLError, RuntimeError, TimeoutError, OSError) as exc:
         # A warmup failure is not fatal on its own; the timed reps will fail
         # too and report properly. Say so rather than swallowing it.
         print(f"  warmup request failed ({exc}) -- continuing to timed reps")
