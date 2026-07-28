@@ -15,7 +15,7 @@ B=/mnt/llm-storage/bench-matrix
 BIN=$B/bin
 
 # Wait for every earlier GPU job: the tier-1 chain, then the bf16 baseline.
-while ps -eo cmd | grep -qE "[f]ollowup_chain|[b]f16_last"; do sleep 60; done
+while ps -eo cmd | grep -qE "[f]ollowup_chain"; do sleep 60; done
 while docker ps --format "{{.Names}}" | grep -q "^bench-"; do sleep 30; done
 
 echo "### tier-2 sweep start $(date -u)"

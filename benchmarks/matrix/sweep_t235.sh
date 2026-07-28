@@ -17,7 +17,7 @@
 B=/mnt/llm-storage/bench-matrix
 BIN=$B/bin
 
-while ps -eo cmd | grep -qE "[f]ollowup_chain|[b]f16_last|[s]weep_t80"; do sleep 60; done
+while ps -eo cmd | grep -qE "[f]ollowup_chain|[s]weep_t80"; do sleep 60; done
 while docker ps --format "{{.Names}}" | grep -q "^bench-"; do sleep 30; done
 
 # Refuse to start on an incomplete download rather than half-load a model.
