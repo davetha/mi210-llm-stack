@@ -39,13 +39,109 @@ compression, btrfs and I/O are all irrelevant to this cost. It is CPU in Python.
 
 Two practical notes that follow:
 
-- **vLLM's prefetch is on by default and needs no flag.** It is an unconditional
-  `threading.Thread(target=_run_prefetch, daemon=True).start()` in
-  `weight_utils.py`, doing plain buffered `f.read(block_size)` across a thread
-  pool. Nothing about btrfs or transparent compression defeats it — the kernel
-  decompresses into page cache on ordinary reads.
 - **Faster storage would not help.** Any effort spent on NVMe layout, disabling
   compression, or mount tuning is aimed at 0.1% of the problem.
+- **But `--safetensors-load-strategy=prefetch` is still mandatory on btrfs**,
+  for a different reason — see below.
+
+### `--safetensors-load-strategy=prefetch` is required on btrfs, and is not automatic
+
+Correcting an earlier claim in this document that prefetch is "on by default and
+needs no flag". **It is not.** The auto-detection covers network filesystems
+only:
+
+```python
+is_net_fs = fs_type in ("nfs", "nfs4", "lustre")
+...
+if safetensors_load_strategy is None:
+    if is_net_fs and fits_in_ram:
+        should_prefetch = True
+    elif not is_net_fs and fits_in_ram:
+        logger.info_once(
+            "Auto-prefetch is disabled because the filesystem (%s) is not a "
+            "recognized network FS (NFS/Lustre). If you want to force "
+            "prefetching, start vLLM with --safetensors-load-strategy=prefetch.",
+            fs_name,
+        )
+```
+
+btrfs, ext4 and xfs all fall into the second branch and get **no prefetch**
+unless asked. vLLM even names the filesystem in the log:
+
+```
+Filesystem type for checkpoints: BTRFS. Checkpoint size: 56.87 GiB.
+Available RAM: 455.36 GiB.
+```
+
+**This stack already passes the flag** (`bf16_final.sh`, `followup_chain.sh`,
+`rerun_glm_cold.sh`, `rerun_t80_cold.sh` and others), which is why the 13.19 s
+prefetch above happened at all. Anyone reproducing from this repo on a local
+filesystem should keep it. Without it, upstream
+[#40988](https://github.com/vllm-project/vllm/issues/40988) reports the failure
+mode on ext4: mmap-driven random reads during weight materialization — ~13,000
+scattered reads per rank — leaving some workers hung past 60 minutes while
+others finish in 6–9. That is a **hang from random-read tail latency**, a
+different symptom from the steady CPU-bound crawl documented here.
+
+### The shards get *slower*, which rules out I/O completely
+
+The strongest evidence yet that this is not storage, and a new lead in its own
+right. Successive shards of the same model, same run:
+
+| shard | s/it |
+|---:|---:|
+| 1/16 | 697.08 |
+| 2/16 | 773.67 |
+| 3/16 | 794.97 |
+| 4/16 | 808.96 |
+| 5/16 | 815.57 |
+| 6/16 | 819.98 |
+
+**Monotonically increasing, +18% across six shards.** If disk were the
+bottleneck this would trend the other way as page cache warms. Instead the cost
+grows with the number of tensors already resident — which is the signature of
+work that scales with what has been loaded, not with what is being read.
+
+That is a concrete, previously unnoticed lead: something in the load path is
+super-linear in loaded-tensor count. If it is O(n²), it explains why the problem
+is catastrophic rather than merely slow at 235B (810 s/shard × 48 shards ≈ 7
+hours) while being tolerable at 30B.
+
+**Late-shard profile: same function, not a different one.** `py-spy` on the
+running worker at shard 6 lands on the identical frame the early samples did:
+
+```
+_load_w13 (fused_moe/layer.py:771)          <- expert_data.copy_(loaded_weight)
+_load_model_weight_or_group_weight_scale (layer.py:623)
+weight_loader (layer.py:1159)
+load_weights (models/qwen3_moe.py:627)
+```
+
+Line 771 is the host-to-device copy itself. Note this build **already carries
+the `contiguous()` fix** — the refuted patch is in the image — and is still at
+815 s/shard, which is consistent with that refutation rather than a new result.
+
+### The number that makes this the top loader lead
+
+**Effective host-to-device throughput is single-digit MB/s.**
+
+56.87 GiB checkpoint, TP=2, so ~28.4 GiB materialised per rank. At 815 s/shard ×
+16 shards ≈ 13,040 s, that is **~2.2 MB/s per rank**. Against a PCIe 4.0 x16 link
+that should sustain ~25 GB/s, this is **four orders of magnitude off**.
+
+No amount of I/O tuning explains a 10,000× shortfall on a bus that is not being
+used. Whatever `copy_` is doing here, it is not DMA — it is the per-element
+gather the code comment warns about, or a page-fault-per-access walk of the
+mmap'd source, or both. The `contiguous()` fix targeted exactly this and did
+nothing, which means the strided-source hypothesis in its docstring is wrong or
+incomplete.
+
+**Next probe, and it is cheap:** time a single `expert_data.copy_(loaded_weight)`
+in isolation against the same copy with the source first materialised via
+`torch.empty_like().copy_()` on CPU, and against a plain
+`loaded_weight.to(device)`. That separates "the H2D transfer is slow" from "the
+CPU-side read of the mmap is slow", which the current profile cannot distinguish
+— `copy_` blocks on both and `py-spy` attributes the whole wait to line 771.
 
 **The fix did not work.** `configs/fast_moe_expert_load.py` makes each narrowed
 slice contiguous before the host-to-device copy. Measured on 235B GPTQ-Int4 at
