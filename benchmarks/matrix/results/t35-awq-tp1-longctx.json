@@ -1,0 +1,71 @@
+{
+  "label": "t35-awq-tp1",
+  "tier": "35B",
+  "quant": "awq",
+  "engine": "vllm",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 262144,
+  "actual_prompt_tokens": 241583,
+  "ttft_s_median": 540.9722206520091,
+  "ttft_s_min": 540.7633650310454,
+  "ttft_s_max": 541.1810762729729,
+  "implied_prefill_tps_median": 446.5664371368781,
+  "decode_tps_median": 0.7485155782971253,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "s the only word.\n\nThis response is concise and meets their request exactly, so I'll go with that.\n</think>\n\nACKNOWLEDGED",
+  "reps": 2,
+  "vram_before": {
+    "per_gpu_bytes": [
+      11628544,
+      62690217984
+    ],
+    "total_gb": 62.7
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      11628544,
+      62690217984
+    ],
+    "total_gb": 62.7
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 540.7633650310454,
+      "total_s": 706.8009174480103,
+      "stream_tokens": 125,
+      "decode_tps": 0.7468190049858054,
+      "text": "<think>\nOkay, the user provided a very long string of text that appears to be random or encoded data. They want me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nI need to make sure I follow the ins ...[snip]...  long text and reply with exactly \"ACKNOWLEDGED\". So I should just output that word.\n\nLet me check the instructions again. The user says: \"The text above is padding; ignore it. Reply with exactly one word: ACKNOWLEDGED\"\n\nSo, I'll respond with \"ACKNOWLEDGED\" as the single word.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 241583,
+        "total_tokens": 241709,
+        "completion_tokens": 126
+      },
+      "rep": 0,
+      "marker": "514faa15487c440ca6538ef5cb27943d",
+      "target_prompt_tokens": 262144,
+      "wall_start": 1785192622.531816,
+      "actual_prompt_tokens": 241583,
+      "implied_prefill_tps": 446.7443906562173
+    },
+    {
+      "ttft_s": 541.1810762729729,
+      "total_s": 801.1075512300013,
+      "stream_tokens": 196,
+      "decode_tps": 0.7502121516084451,
+      "text": "<think>\nOkay, the user has provided a very long string of text that appears to be a mix of military or communication codes, possibly from a radio or communication system. The user's instruction is to  ...[snip]... ction is to reply with exactly one word: \"ACKNOWLEDGED\".\n3. I must not add any other text or explanation.\n\nI should just output \"ACKNOWLEDGED\" as instructed. The long text is just padding to test if I follow the instructions.\n\nSo, the correct response is simply \"ACKNOWLEDGED\".\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 241577,
+        "total_tokens": 241774,
+        "completion_tokens": 197
+      },
+      "rep": 1,
+      "marker": "eb5aaa5975a44a8aa0cd30c5ada3673d",
+      "target_prompt_tokens": 262144,
+      "wall_start": 1785193329.3653924,
+      "actual_prompt_tokens": 241577,
+      "implied_prefill_tps": 446.3884836175389
+    }
+  ]
+}

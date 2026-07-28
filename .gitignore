@@ -23,3 +23,6 @@ core.*
 # Local scratch
 *.log
 *.tmp
+
+# OMC orchestration scratch (run-continuation state, not project content)
+.omo/

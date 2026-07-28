@@ -1,0 +1,101 @@
+{
+  "label": "t35-q8-256k",
+  "tier": "35B",
+  "quant": "q8_0",
+  "engine": "llamacpp",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15027,
+  "ttft_s_median": 4.735153223038651,
+  "ttft_s_min": 4.3921319879591465,
+  "ttft_s_max": 4.788833987084217,
+  "implied_prefill_tps_median": 3195.6727242480797,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " thing they asked for, so I'll stick to it.\n\nOkay, final decision: reply with \"ACKNOWLEDGED\" as instructed.\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      33199439872,
+      35203555328
+    ],
+    "total_gb": 68.4
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      33307639808,
+      35375235072
+    ],
+    "total_gb": 68.68
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 4.3921319879591465,
+      "total_s": 4.443697292008437,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a long",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15027,
+        "total_tokens": 15035,
+        "prompt_tokens_details": {
+          "cached_tokens": 3
+        }
+      },
+      "rep": 0,
+      "marker": "a4268639f4ec42bebd7fcd89aaa89585",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785199269.3052268,
+      "actual_prompt_tokens": 15027,
+      "implied_prefill_tps": 3421.3452694946136,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 4.788833987084217,
+      "total_s": 4.84059071703814,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "We are given a long string",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15135,
+        "total_tokens": 15143,
+        "prompt_tokens_details": {
+          "cached_tokens": 4
+        }
+      },
+      "rep": 1,
+      "marker": "518d0a416af949d889350e796d730785",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785199273.7512245,
+      "actual_prompt_tokens": 15135,
+      "implied_prefill_tps": 3160.47706828427,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 4.735153223038651,
+      "total_s": 4.786832359968685,
+      "stream_tokens": 6,
+      "decode_tps": null,
+      "text": "The user has provided a long",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 15132,
+        "total_tokens": 15140,
+        "prompt_tokens_details": {
+          "cached_tokens": 4
+        }
+      },
+      "rep": 2,
+      "marker": "d49ab67f7502461781b3b52b26a4fff6",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785199278.5938003,
+      "actual_prompt_tokens": 15132,
+      "implied_prefill_tps": 3195.6727242480797,
+      "decode_tps_note": "suppressed: only 6 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}

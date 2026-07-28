@@ -1,0 +1,98 @@
+{
+  "label": "t35-q8-256k",
+  "tier": "35B",
+  "quant": "q8_0",
+  "engine": "llamacpp",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 250000,
+  "actual_prompt_tokens": 230410,
+  "ttft_s_median": 345.9439669979038,
+  "ttft_s_min": 345.01371487695724,
+  "ttft_s_max": 345.96424164797645,
+  "implied_prefill_tps_median": 665.9936844988895,
+  "decode_tps_median": 29.06260738661277,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "GED\" and nothing more.\n\nFinally, I'll make sure my response is clean and error-free to avoid any confusion.\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      33307639808,
+      35375235072
+    ],
+    "total_gb": 68.68
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      33311289344,
+      35379027968
+    ],
+    "total_gb": 68.69
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 345.96424164797645,
+      "total_s": 348.2339150790358,
+      "stream_tokens": 66,
+      "decode_tps": 28.63850737070899,
+      "text": "I need to respond with exactly one word: \"ACKNOWLEDGED\"\n\nThe user has provided a very long string of text that appears to be random words and phrases, but they've instructed me to ignore it and reply with \"ACKNOWLEDGED\".\n\nSo I'll simply respond with \"ACKNOWLEDGED\" as requested.\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 71,
+        "prompt_tokens": 230410,
+        "total_tokens": 230481,
+        "prompt_tokens_details": {
+          "cached_tokens": 3
+        }
+      },
+      "rep": 0,
+      "marker": "2d54d0f8fc82484bb825e80ce77a3461",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785199287.4959369,
+      "actual_prompt_tokens": 230410,
+      "implied_prefill_tps": 665.9936844988895
+    },
+    {
+      "ttft_s": 345.9439669979038,
+      "total_s": 349.5224484289065,
+      "stream_tokens": 105,
+      "decode_tps": 29.06260738661277,
+      "text": "The user has provided a very long string of text that appears to be random words and phrases, and then instructed me to \"Reply with exactly one word: ACKNOWLEDGED\".\n\nThis seems to be a test to see if I can follow simple instructions. The text itself doesn't contain any meaningful content - it's just a long string of words that appear to be randomly generated.\n\nThe instruction is clear: I need to reply with exactly one word, which is \"ACKNOWLEDGED\".\n\nI'll do exactly that.\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 110,
+        "prompt_tokens": 230341,
+        "total_tokens": 230451,
+        "prompt_tokens_details": {
+          "cached_tokens": 5
+        }
+      },
+      "rep": 1,
+      "marker": "1fe56f8ded834216816ea1ec601a17e7",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785199635.7608645,
+      "actual_prompt_tokens": 230341,
+      "implied_prefill_tps": 665.833261955384
+    },
+    {
+      "ttft_s": 345.01371487695724,
+      "total_s": 348.7491388639901,
+      "stream_tokens": 110,
+      "decode_tps": 29.180087901808605,
+      "text": "The user has provided a very long string of text that appears to be random words and phrases, and then instructed me to \"Reply with exactly one word: ACKNOWLEDGED\".\n\nThis seems to be a test to see if  ...[snip]...  follow simple instructions. The text is clearly just padding and not meaningful content.\n\nI should simply reply with \"ACKNOWLEDGED\" as instructed, as that's the only word I'm supposed to output.\n\nThe instruction says \"Reply with exactly one word: ACKNOWLEDGED\", so I'll do exactly that.\nACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 115,
+        "prompt_tokens": 230375,
+        "total_tokens": 230490,
+        "prompt_tokens_details": {
+          "cached_tokens": 6
+        }
+      },
+      "rep": 2,
+      "marker": "1142ae083f674de1b1db3a9e6f42eaf8",
+      "target_prompt_tokens": 250000,
+      "wall_start": 1785199985.3114579,
+      "actual_prompt_tokens": 230375,
+      "implied_prefill_tps": 667.7270788558623
+    }
+  ]
+}

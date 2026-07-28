@@ -1,0 +1,96 @@
+{
+  "label": "t80-awq4",
+  "tier": "80B",
+  "quant": "awq-int4",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 110000,
+  "actual_prompt_tokens": 101555,
+  "ttft_s_median": 34.016505521023646,
+  "ttft_s_min": 33.990669067017734,
+  "ttft_s_max": 34.337905238964595,
+  "implied_prefill_tps_median": 2987.7317154236944,
+  "decode_tps_median": 45.78620145320775,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "her words or characters. Let me make sure there's nothing else. Yep, just \"ACKNOWLEDGED\". Got it.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      11714560,
+      63396880384
+    ],
+    "total_gb": 63.41
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      11718656,
+      63397027840
+    ],
+    "total_gb": 63.41
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 33.990669067017734,
+      "total_s": 37.79094009299297,
+      "stream_tokens": 175,
+      "decode_tps": 45.78620145320775,
+      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo the main instruction is to just say \"A ...[snip]... in. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the response should be only \"ACKNOWLEDGED\" without any quotes or anything else.\n\nNo need to think about the content of the padding. Just follow the instruction precisely. So the correct response is simply \"ACKNOWLEDGED\".\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101555,
+        "total_tokens": 101731,
+        "completion_tokens": 176
+      },
+      "rep": 0,
+      "marker": "c5d385c01467421caea2fab637342160",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785203446.8332758,
+      "actual_prompt_tokens": 101555,
+      "implied_prefill_tps": 2987.7317154236944
+    },
+    {
+      "ttft_s": 34.016505521023646,
+      "total_s": 37.6722328630276,
+      "stream_tokens": 168,
+      "decode_tps": 45.681740720464305,
+      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction here is to just  ...[snip]...  instructions again. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the correct response is simply \"ACKNOWLEDGED\" without any quotes or anything else.\n\nNo need to analyze the content of the padding. Just follow the instruction precisely. So the answer is straightforward.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101702,
+        "total_tokens": 101871,
+        "completion_tokens": 169
+      },
+      "rep": 1,
+      "marker": "95af70fc4d88471dadc2fc1c07ff91a1",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785203484.640267,
+      "actual_prompt_tokens": 101702,
+      "implied_prefill_tps": 2989.783884095438
+    },
+    {
+      "ttft_s": 34.337905238964595,
+      "total_s": 37.718373090960085,
+      "stream_tokens": 156,
+      "decode_tps": 45.85164433318184,
+      "text": "Okay, let's see. The user provided a long string of words that they said is padding and to ignore. They want me to reply with exactly one word: ACKNOWLEDGED.\n\nSo, the main instruction is to ignore the ...[snip]... ng else. Just the word ACKNOWLEDGED. Let me check the instructions again. Yes, \"Reply with exactly one word: ACKNOWLEDGED\". So the correct response is simply that word.\n\nNo extra characters, no punctuation, just the word. So I should output \"ACKNOWLEDGED\" exactly as specified.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101638,
+        "total_tokens": 101795,
+        "completion_tokens": 157
+      },
+      "rep": 2,
+      "marker": "b6fe71ae8cf14bb88f6d82dfd87dac42",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785203522.3250508,
+      "actual_prompt_tokens": 101638,
+      "implied_prefill_tps": 2959.9359452092403
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 45.41,
+    "load_seconds": 163.673024,
+    "kv_cache_gib": 10.37,
+    "kv_cache_tokens": 446934.0,
+    "graph_capture_gib": 6.01
+  }
+}

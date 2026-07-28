@@ -1,0 +1,96 @@
+{
+  "label": "t35-w8a8",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 110000,
+  "actual_prompt_tokens": 101640,
+  "ttft_s_median": 61.439874415053055,
+  "ttft_s_min": 60.96587630198337,
+  "ttft_s_max": 61.992668771068566,
+  "implied_prefill_tps_median": 1653.177207261912,
+  "decode_tps_median": 33.79976521098605,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": ", I'll make sure my reply is clean and matches what they asked for. No need to overcomplicate it.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      11530240,
+      64093962240
+    ],
+    "total_gb": 64.11
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      11530240,
+      64094109696
+    ],
+    "total_gb": 64.11
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 61.992668771068566,
+      "total_s": 63.41943135904148,
+      "stream_tokens": 49,
+      "decode_tps": 33.64261460703828,
+      "text": "<think>\nI need to respond with exactly one word: ACKNOWLEDGED\n\nThe instruction says: \"Reply with exactly one word: ACKNOWLEDGED\"\n\nSo I'll simply respond with \"ACKNOWLEDGED\" as requested.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101640,
+        "total_tokens": 101690,
+        "completion_tokens": 50
+      },
+      "rep": 0,
+      "marker": "6ecd348b2e8946b5bafa3e0b66b1375b",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785199063.383003,
+      "actual_prompt_tokens": 101640,
+      "implied_prefill_tps": 1639.5487081761917
+    },
+    {
+      "ttft_s": 60.96587630198337,
+      "total_s": 63.806132117984816,
+      "stream_tokens": 97,
+      "decode_tps": 33.79976521098605,
+      "text": "<think>\nThe user has provided a very long string of text that appears to be random characters and words, and then instructed me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nI need to simply reply with \"ACKNOWLEDGED\" as requested. The text appears to be padding or some kind of test, but the instruction is clear - just reply with \"ACKNOWLEDGED\".\n\nI'll make sure to only reply with that one word, as instructed.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101435,
+        "total_tokens": 101533,
+        "completion_tokens": 98
+      },
+      "rep": 1,
+      "marker": "b48fae6bdd7345b5923fcbf8081f3e8d",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785199126.8167586,
+      "actual_prompt_tokens": 101435,
+      "implied_prefill_tps": 1663.7995900782298
+    },
+    {
+      "ttft_s": 61.439874415053055,
+      "total_s": 64.30894850404002,
+      "stream_tokens": 98,
+      "decode_tps": 33.8088196669657,
+      "text": "<think>\nThe user has provided a very long string of text that appears to be random characters and words, and then instructed me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nI need to simply reply with \"ACKNOWLEDGED\" as requested. The text appears to be some kind of padding or test data, and the instruction is clear - just reply with \"ACKNOWLEDGED\".\n\nI'll make sure to reply with exactly that one word, nothing more.\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101571,
+        "total_tokens": 101670,
+        "completion_tokens": 99
+      },
+      "rep": 2,
+      "marker": "9ef0d511c6e94ad1a87c2893fa7c3af2",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785199190.635897,
+      "actual_prompt_tokens": 101571,
+      "implied_prefill_tps": 1653.177207261912
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 29.17,
+    "load_seconds": 122.772929,
+    "kv_cache_gib": 27.23,
+    "kv_cache_tokens": 297472.0,
+    "graph_capture_gib": 6.15
+  }
+}

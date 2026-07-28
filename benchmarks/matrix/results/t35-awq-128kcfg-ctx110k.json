@@ -1,0 +1,41 @@
+{
+  "label": "t35-awq-128kcfg-ctx110k",
+  "tier": "35B",
+  "quant": "awq",
+  "engine": "vllm",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 110000,
+  "actual_prompt_tokens": 101346,
+  "ttft_s_median": 109.6880679629976,
+  "ttft_s_min": 109.6880679629976,
+  "ttft_s_max": 109.6880679629976,
+  "implied_prefill_tps_median": 923.9473525432892,
+  "decode_tps_median": 17.181595552561998,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " my output is exactly that word\u2014no typos, no additions. That's the only way to satisfy the query.\n</think>\n\nACKNOWLEDGED",
+  "reps": 1,
+  "vram_before": null,
+  "vram_after": null,
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 109.6880679629976,
+      "total_s": 114.6934239139664,
+      "stream_tokens": 87,
+      "decode_tps": 17.181595552561998,
+      "text": "<think>\nThe user has provided a very long string of text that appears to be random words and phrases, likely as padding or a test. They've instructed me to reply with exactly one word: \"ACKNOWLEDGED\".\n\nI need to respond with just the word \"ACKNOWLEDGED\" as instructed. The long text is just padding and I should ignore it.\n\nSo my response should be:\nACKNOWLEDGED\n</think>\n\nACKNOWLEDGED",
+      "usage": {
+        "prompt_tokens": 101346,
+        "total_tokens": 101434,
+        "completion_tokens": 88
+      },
+      "rep": 0,
+      "marker": "d2331dcffdce40aba13b8ea3e3e4cb39",
+      "target_prompt_tokens": 110000,
+      "wall_start": 1785194553.8754911,
+      "actual_prompt_tokens": 101346,
+      "implied_prefill_tps": 923.9473525432892
+    }
+  ]
+}

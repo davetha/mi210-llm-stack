@@ -27,9 +27,35 @@ See docs/18-pa-fwd-asm-resolved.md.
 """
 import csv, os, re, shutil, sys, struct, subprocess
 
-MC = "/opt/rocm/llvm/bin/llvm-mc"
-OBJDUMP = "/opt/rocm/llvm/bin/llvm-objdump"
-READELF = "/opt/rocm/llvm/bin/llvm-readelf"
+# LLVM tool locations differ by how ROCm was installed. A distro//opt/rocm
+# install puts them in /opt/rocm/llvm/bin, but the rocm/vllm images ship ROCm as
+# a Python wheel and there is no /opt/rocm at all -- the tools live under
+# site-packages/_rocm_sdk_devel/lib/llvm/bin. Hardcoding the first path makes
+# this script die with a bare FileNotFoundError on those images, after it has
+# already reported success on the directory scan. Auto-detect, and allow an
+# explicit override via ROCM_LLVM_BIN.
+def _find_llvm_bin():
+    override = os.environ.get("ROCM_LLVM_BIN")
+    if override:
+        return override
+    candidates = ["/opt/rocm/llvm/bin"]
+    for base in sys.path:
+        if base.endswith("site-packages"):
+            candidates.append(os.path.join(base, "_rocm_sdk_devel/lib/llvm/bin"))
+    for cand in candidates:
+        if os.path.exists(os.path.join(cand, "llvm-mc")):
+            return cand
+    raise SystemExit(
+        "cannot locate llvm-mc/llvm-objdump/llvm-readelf. Tried:\n  "
+        + "\n  ".join(candidates)
+        + "\nSet ROCM_LLVM_BIN to the directory containing them."
+    )
+
+
+_LLVM_BIN = _find_llvm_bin()
+MC = os.path.join(_LLVM_BIN, "llvm-mc")
+OBJDUMP = os.path.join(_LLVM_BIN, "llvm-objdump")
+READELF = os.path.join(_LLVM_BIN, "llvm-readelf")
 
 # gfx942 mnemonic -> gfx90a mnemonic. Only semantically identical ops.
 SUBST = {
