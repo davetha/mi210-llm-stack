@@ -26,11 +26,30 @@ TP=2, patch verified present in the container:
 
 Identical. Source-side contiguity is not the cost.
 
-**What this rules in and out.** The hot function is right; the mechanism is
-wrong. The patch's own closing note named the next suspect and it now looks
-like the live one: `expert_data` is itself a narrowed **device** tensor, so the
-*destination* may be a scatter. That was left alone on the assumption the host
-side dominated — an assumption this measurement refutes.
+**Why it did nothing: I patched the wrong function.** `py-spy` on the GPTQ-Int8
+arm during its 20-minute load puts every sample here:
+
+```
+moe_wna16_weight_loader (quantization/moe_wna16.py:445)
+load_weights            (models/qwen3_moe.py:627)
+```
+
+Not `_load_w13` in `fused_moe/layer.py`, which is what the patch modifies.
+**GPTQ never reaches that function.** It routes through the WNA16 quantization
+loader instead, which runs per expert per weight and does a
+`loaded_weight.to(device)` followed by a format conversion (`convert_awq_tensor`
+or the gptq equivalent) on each one. Same structural problem — thousands of
+small host-to-device transfers plus per-tensor Python work — in a different
+place.
+
+The original `py-spy` evidence was from the **30B bf16** run, which genuinely
+does hit `_load_w13`. Generalising from that one profile to "the MoE loader" was
+the error: the loader depends on the quantization method, which is also why
+`compressed-tensors` loads fast while bf16 and GPTQ crawl.
+
+So there are (at least) two slow loaders, not one, and a fix for either does
+nothing for the other. `_load_w13`'s destination-side scatter remains an open
+suspect for the bf16 path specifically.
 
 Also note the earlier framing error, already corrected: TP>1 is not sufficient
 to trigger this. `compressed-tensors` loads fast at TP=2 (GLM-4.6: 9.11 s/it),
