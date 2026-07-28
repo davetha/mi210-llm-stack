@@ -80,8 +80,13 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 - [`docs/19-aiter-operator-port-matrix.md`](docs/19-aiter-operator-port-matrix.md) — which of AITER's 1,422 ASM kernels can run on gfx90a, and why the other 1,180 cannot
 - [`docs/20-int8-gemm-gfx90a.md`](docs/20-int8-gemm-gfx90a.md) — INT8 GEMM built from source on gfx90a, bit-exact, 4.3x at decode shapes
 - [`docs/21-fp8-block-gemm-gfx90a.md`](docs/21-fp8-block-gemm-gfx90a.md) — block-scaled FP8 was never a tuning problem; gfx90a has no FP8 *decoder*, and a 3-instruction bit trick fixes it
+- [`docs/22-rocwmma-flash-attention-gfx90a.md`](docs/22-rocwmma-flash-attention-gfx90a.md) — rocWMMA FlashAttention is 18-26% **slower**; the matrix cores were never idle, so the premise was wrong rather than the result merely negative
+- [`docs/23-vllm-gfx90a-cudagraph-decode-cliff.md`](docs/23-vllm-gfx90a-cudagraph-decode-cliff.md) — `--max-model-len` above 128k costs **10x decode on every request**, because the gfx9 attention gate is evaluated at CUDA-graph capture against the *configured* max
+- [`docs/24-mi210-quantization-matrix.md`](docs/24-mi210-quantization-matrix.md) — **which quantization wins on an MI210**: INT8 W8A8, and it was the one format vLLM refused to run. Six formats, two engines, correctness-checked
+- [`docs/25-optimization-backlog.md`](docs/25-optimization-backlog.md) — leads not yet pursued, each with how it could be *wrong*, plus the closed ones so they are not retried
 
 ### Benchmarks
+- [`benchmarks/matrix/`](benchmarks/matrix/) — the quantization matrix: harness, sweeps, raw JSON, and [`REPRODUCE.md`](benchmarks/matrix/REPRODUCE.md) with exact tags, versions and CLI args
 - [`benchmarks/README.md`](benchmarks/README.md) — **all measured performance numbers in one place** (vLLM single/TP=2, llama.cpp, TurboQuant, KIVI, FlashAttention, KTransformers)
 
 ### Build & ops guides
