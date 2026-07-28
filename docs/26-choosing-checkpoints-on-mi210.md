@@ -552,7 +552,12 @@ Ranked by expected value.
    you have the bf16 weights. **Untested on this stack** — it is the obvious
    route and it is written down here so it is not forgotten, not because it has
    been verified end to end.
-4. **Do not** try to reach the INT8 path by forcing runtime activation
+4. **Avoid `compressed-tensors` 4-bit with `type: "int"` on this hardware.**
+   Measured: such a checkpoint fails to load at all, because the one
+   ROCm-capable mixed-precision kernel accepts `uint4b8`/`uint4` but not signed
+   `int4`. AWQ and GPTQ emit the unsigned form and work; llm-compressor's
+   symmetric int4 does not. `docs/27` has the full kernel-by-kernel refusal.
+5. **Do not** try to reach the INT8 path by forcing runtime activation
    quantization on a weight-only checkpoint. The scales in a W8A16 file were
    fitted for a bf16 GEMM; supplying activation scales at runtime changes the
    numerics and needs an accuracy check, not just a throughput measurement. See

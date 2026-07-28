@@ -179,6 +179,43 @@ crash, not accelerate.
 The distinction is the one `docs/25` closes with: *does the kernel actually exist
 for this target?* For Int8 MoE it did. For W4A8 it does not.
 
+### CONFIRMED by running it, and the blocker is worse than predicted
+
+`benchmarks/matrix/round2.sh` E4 served
+`alishafique/DeepSeek-R1-Distill-Qwen-1.5B-quantized.w4a8int8-llmcompressor` on
+gfx90a. It refuses at load, and the error enumerates every candidate:
+
+```
+ValueError: Failed to find a kernel that can implement the WNA16 linear layer. Reasons:
+ RDNA3W4A16LinearKernel cannot implement due to: RDNA3 W4A16 kernel requires gfx1100
+ TritonW4A16LinearKernel cannot implement due to: Quant type int4 not supported;
+                                                  supported: [ScalarType.uint4b8, ScalarType.uint4]
+ ConchLinearKernel  cannot implement due to: Weight type (int4) not supported by
+                                             ConchLinearKernel, supported types are:
+                                             [uint4, uint8, uint4b8, uint8b128]
+```
+
+The static audit was right that no kernel takes int8 activations. **It missed a
+second, independent blocker: the int4 *weight packing* is also unsupported.**
+
+`TritonW4A16LinearKernel` — the one ROCm-capable candidate — accepts
+`uint4b8` and `uint4` but **not `int4`**. compressed-tensors with
+`type: "int", symmetric: true` emits signed `int4`; GPTQ and AWQ emit the
+unsigned-with-bias `uint4b8` form. So this checkpoint would fail on gfx90a
+**even as plain W4A16**, before activations enter the picture.
+
+Two further details worth recording:
+
+- **vLLM routed it to `compressed_tensors_w4a8_fp8.py`**, not `w4a8_int` — the
+  traceback names that file. Whatever the config says, the scheme selection
+  landed on the FP8 variant, which is dead on CDNA2 regardless.
+- **It degraded to "the WNA16 linear layer"** — i.e. even the attempted path was
+  weight-only. The int8-activation path was never in play.
+
+**Verdict: closed, with two blockers rather than one.** A Triton w4a8-int kernel
+for gfx90a would need to handle signed `int4` weights *and* int8 activations,
+neither of which any ROCm-reachable kernel does today.
+
 **What it would take:** a Triton w4a8-int kernel — unpack int4 → int8, dynamic
 per-token activation quantization, `tl.dot` with int8 operands accumulating to
 int32. Triton on ROCm emits `v_mfma_i32_16x16x16i8` for int8 `tl.dot`, so the
@@ -247,6 +284,6 @@ Two conclusions follow, pulling in opposite directions, and both are real:
 | FP8 / sparse (`smfmac`) matrix path | **Closed** — CDNA3 only |
 | AITER ASM helps only W8A8 | **Wrong** — it is bf16 *attention*, helps every format at `head_dim` 128/192; the +12.8% was measured on AWQ-Int4 |
 | AITER ASM INT8 GEMM | **Does not exist on gfx90a** — `i8gemm` is 0 of 9 portable |
-| W4A8-int8 | **Sound idea, no kernel.** Needs a Triton w4a8-int kernel written; not a gate patch |
+| W4A8-int8 | **Closed by measurement.** Two blockers: no ROCm kernel takes int8 activations, *and* none accepts signed `int4` weights (they want `uint4b8`/`uint4`) |
 | Custom paged attention at `head_dim 256` | **No kernel** — `head_size` 64/128 only. The gate is accurate, not conservative |
 | The 80B's speed came from kernels | **No** — it reaches *none* of the ROCm attention fast paths and still wins. Purely architectural |
