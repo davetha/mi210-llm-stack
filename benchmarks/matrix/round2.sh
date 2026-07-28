@@ -16,8 +16,8 @@ set -uo pipefail
 
 BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
-MODELS=$BASE/models
-mkdir -p "$MODELS" "$BASE/results" "$BASE/logs"
+MODELS=$BASE            # models sit directly under bench-matrix/, matching round 1
+mkdir -p "$BASE/results" "$BASE/logs"
 
 fetch() {  # fetch <dest-dir> <hf-repo>
     local dest="$1" repo="$2"
@@ -26,10 +26,29 @@ fetch() {  # fetch <dest-dir> <hf-repo>
     # --connections 1: the Xet CDN signs per-byte-range URLs, so aria2 --split
     # produces holey files that look complete. Round 1 lost a 45 GB download to
     # this before the cause was found.
-    python3 "$BIN/fetch_model.py" --repo "$repo" --dest "$dest" --connections 1 --concurrent 8
+    python3 "$BIN/fetch_model.py" "$repo" "$dest" --connections 1 --concurrent 8
 }
 
 banner() { echo; echo "###############################################################"; echo "# $*"; echo "###############################################################"; }
+
+# ---------------------------------------------------------------------------
+# E0  Isolate TP=2 from the model. Cheapest and most overdue arm in the set.
+#
+# Every tier-2 headline is confounded: the 80B awq-int8 row (6,679 tok/s) is the
+# ONLY arm in the whole matrix that ran on two cards, so it was never comparable
+# to the TP=1 rows beside it. docs/24 says so, but saying so is not the same as
+# measuring it, and the matrix still has no arm that varies TP alone.
+#
+# The 80B cannot supply the control -- 40.95 GiB per rank means ~82 GiB total,
+# which will not fit on one 64 GB card. So run the control from the other side:
+# the 30B w8a8 at TP=2 against its own measured TP=1 row (3.20 s / 4,739 tok/s).
+# Same weights, same flags, same engine, TP the only variable.
+#
+# 30 GB and a 123 s load, so this costs minutes. It should have been in round 1.
+# ---------------------------------------------------------------------------
+banner "E0  30B w8a8 at TP=2 -- the TP control the matrix never had"
+LONGCTX_TOKENS=110000 "$BIN/run_arm.sh" t35-w8a8-tp2 35B w8a8 vllm-aiter "$BASE/t35-w8a8" \
+    --tensor-parallel-size 2 --max-model-len 131072 --no-enable-prefix-caching
 
 # ---------------------------------------------------------------------------
 # E1  Does W8A8 beat W8A16 on the SAME 80B architecture?
@@ -118,9 +137,16 @@ banner "E5  MoE tuning with VLLM_TUNED_CONFIG_FOLDER (round 1 used the wrong var
 # That is why it is here and not first.
 # ---------------------------------------------------------------------------
 banner "E6  30B bf16 baseline at TP=2 (slow: ~3h load, run last of the vLLM arms)"
-fetch "$MODELS/t35-bf16" Qwen/Qwen3-30B-A3B-Thinking-2507
-READY_TIMEOUT=14400 LONGCTX_TOKENS=110000 "$BIN/run_arm.sh" t35-bf16 35B bf16 vllm-aiter "$MODELS/t35-bf16" \
-    --tensor-parallel-size 2 --max-model-len 131072 --no-enable-prefix-caching
+# Guarded: an out-of-band bf16 arm was already running when round 2 was written,
+# and re-running it would burn three hours to reproduce a cell we have. Only the
+# FAILED marker from round 1 is treated as absent.
+if ls "$BASE"/results/t35-bf16-cold16k.json >/dev/null 2>&1; then
+    echo "E6 skipped: t35-bf16-cold16k.json already exists"
+else
+    fetch "$MODELS/t35-bf16" Qwen/Qwen3-30B-A3B-Thinking-2507
+    READY_TIMEOUT=14400 LONGCTX_TOKENS=110000 "$BIN/run_arm.sh" t35-bf16 35B bf16 vllm-aiter "$MODELS/t35-bf16" \
+        --tensor-parallel-size 2 --max-model-len 131072 --no-enable-prefix-caching
+fi
 
 # ---------------------------------------------------------------------------
 # E7  GLM-4.6 GGUF, with the -ngl / --n-cpu-moe interaction handled correctly.
@@ -129,10 +155,18 @@ READY_TIMEOUT=14400 LONGCTX_TOKENS=110000 "$BIN/run_arm.sh" t35-bf16 35B bf16 vl
 # common_fit_params() is all-or-nothing, so setting EITHER -ngl or --n-cpu-moe
 # disables auto-fit for the whole model. They must be set together.
 #
-# The sweep also validates the bandwidth model in docs/26, which predicts decode
-# is roughly LINEAR in the number of CPU-pinned layers. Three points is enough to
-# see whether that holds. If it does not, the model is wrong and the doc must say
-# so -- this is a real test, not a formality.
+# The third attempt SUCCEEDED out of band, with no placement flags at all:
+# 8.51 t/s decode at 25.8k, 12.83 t/s at short context, correctness PASS. But
+# read what it actually did before reading it as an offload result -- llama.cpp's
+# auto-fit put 135.57 GB of a 139 GB model on the two cards, so only ~3 GiB was
+# ever CPU-resident. That is a *capability* result (a 357B model runs almost
+# entirely in 128 GB of VRAM at IQ3_XS) and NOT a measurement of CPU offload.
+#
+# Which makes the sweep below the real test, with the auto-fit run as its N≈0
+# anchor. Forcing 30/45/60 expert layers to CPU is strictly more offload than
+# auto-fit chose, so decode should degrade -- and docs/26 predicts roughly
+# LINEARLY in the pinned-layer count. If the curve is not linear, the bandwidth
+# model is wrong and the doc must say so. This is a real test, not a formality.
 # ---------------------------------------------------------------------------
 banner "E7  GLM-4.6 GGUF + --n-cpu-moe sweep (tests docs/26 bandwidth model)"
 fetch "$MODELS/glm46-q4km" bartowski/zai-org_GLM-4.6-GGUF

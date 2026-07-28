@@ -429,8 +429,9 @@ Two corollaries:
   `mimo` shape, where prefill costs ~7.4 s per chunk re-reading KV from DDR4.
   Prefer a hybrid (GDN, Mamba) or heavily-GQA model when experts go to RAM.
 - **Prefer a model that fits over a bigger one that does not.** At tier 2 the
-  80B at TP=2 decoded **51.3 t/s** at 101k context. The 357B under offload
-  projects to single digits. That is not a close call.
+  80B at TP=2 decoded **51.3 t/s** at 101k and prefilled at **4,668 t/s**. The
+  357B at IQ3_XS — which very nearly *does* fit — manages 8.5 t/s and **181
+  t/s prefill**. Six times the decode gap and **25× on prefill**. Not close.
 
 ### Invocation
 
@@ -458,14 +459,41 @@ For finer control, `-ot` takes a regex over tensor names and overrides placement
 per tensor — `-ot "blk\.(2[0-9]|[3-9][0-9])\.ffn.*exps=CPU"` pins experts from
 layer 20 up, leaving everything below and all attention on GPU.
 
-### Honest status of the 357B tier
+### The 357B tier — measured, and it is not what the model predicted
 
-**No throughput number exists for GLM-4.6 on llama.cpp.** The vLLM arm is the
-measured-unusable one above; the GGUF arm failed twice on the `-ngl` /
-`--n-cpu-moe` interaction and its third attempt did not complete before the GPU
-host became unreachable. The `~3.6 t/s` figure above is the **planning model,
-not a measurement** — it is there to say whether the run is worth starting, not
-to report a result.
+The GGUF arm completed. **GLM-4.6 IQ3_XS on llama.cpp, correctness PASS:**
+
+| | |
+|---|---:|
+| decode @ short context | **12.83 t/s** |
+| decode @ 25,792 tokens | **8.51 t/s** |
+| prefill @ 15.2k | 196 t/s (77.5 s TTFT) |
+| prefill @ 25.8k | 181 t/s (142.6 s TTFT) |
+
+**Read the placement before reading the number.** llama.cpp's auto-fit put
+**135.57 GB of a 139 GB model onto the two cards** — roughly 63 GiB per card.
+Only ~3 GiB was ever CPU-resident.
+
+So this is a **capability** result, and a better one than expected: *a 357B model
+runs almost entirely inside 128 GB of VRAM at IQ3_XS, on two cards, correctly.*
+It is **not** a measurement of CPU offload, and it does not validate the
+bandwidth model above — the configuration the model describes (all experts in
+RAM) was never run.
+
+Two things it does show:
+
+- **Prefill is the tier-4 problem, exactly as predicted.** 181–196 tok/s against
+  the 80B's 4,668. That is 25× slower on a model 4.5× larger, and it is the
+  `mimo` signature: a small CPU-resident fraction serializes the whole forward
+  pass. **Decode is fine; prefill is what makes this tier painful.**
+- **Decode falls 33% from short context to 25.8k** (12.83 → 8.51), steeper than
+  the 80B's curve, consistent with 92 layers of GQA KV.
+
+The `~3.6 t/s` projection earlier in this document remains **unvalidated** — it
+neither matched nor was contradicted, because it describes a different placement.
+`benchmarks/matrix/round2.sh` E7 forces `--n-cpu-moe` to 30/45/60 with this
+auto-fit run as the N≈0 anchor, which is the actual test of whether decode
+degrades linearly in pinned-layer count.
 
 ---
 

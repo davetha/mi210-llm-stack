@@ -273,6 +273,24 @@ one: a 357B model does run on two MI210s with 70 GB in system RAM and produces
 correct output. Whether it runs *usefully* depends on the offload mechanism, and
 vLLM's is the wrong one here.
 
+**The llama.cpp arm has since completed and settles it.** GLM-4.6 **IQ3_XS**,
+correctness PASS:
+
+| | |
+|---|---:|
+| decode @ short ctx | 12.83 t/s |
+| decode @ 25,792 tok | **8.51 t/s** |
+| prefill @ 25.8k | **181 t/s** |
+| placement | **135.57 GB of 139 GB on GPU** (auto-fit) |
+
+Two conclusions, and the second is the one that matters. First, llama.cpp is
+usable at this tier where vLLM was not — 8.5 t/s against a projected two hours
+per request. Second, **this is barely an offload result at all**: auto-fit put
+all but ~3 GiB on the cards, so a 357B model very nearly fits in 128 GB of VRAM
+at IQ3_XS. What remains slow is **prefill, at 181 t/s** — 25× behind the 80B —
+which is the signature of a small CPU-resident fraction serializing the forward
+pass, not of decode bandwidth. Selection guidance in `docs/26`.
+
 - **Tiers 2–4 are still running.** 80B (Qwen3-Next, hybrid GDN), 235B
   (GPTQ-Int4 at reduced context), GLM-4.6 (IQ3_XS with CPU offload).
 - **The MoE expert GEMMs are still not tuned.** All 48 AWQ layers fall back
