@@ -131,19 +131,59 @@ Capture evaluates the gfx9 gate (`max_seq_len <= 128*1024`) against the
 *configured* max, so a 256k server bakes the Triton fallback into the graph and
 replays it for **every** request. Measured cost: 10x decode.
 
-**Proposed.** Three options, cheapest first:
-1. Evaluate the capture-time gate against a representative runtime length.
-2. Raise the gfx9 threshold and verify correctness at long context.
-3. Make the captured graph's attention dispatch metadata-driven rather than baked.
+**ROOT CAUSE FOUND — and it is neither of the things this entry feared.** It is
+not temp-buffer sizing and it is not a correctness limit. From
+`csrc/rocm/attention.cu`:
 
-**How this could be wrong.** The 128k ceiling probably exists for a reason —
-likely partition-count or temp-buffer sizing in the custom paged-attention
-kernel. Option 2 without a correctness check could produce silently wrong
-attention above 128k. Any of these needs numeric verification at 200k+, not just
-a throughput measurement.
+```c
+const int npar_loops = DIVIDE_ROUND_UP(max_num_partitions, WARP_SIZE);
+// reduction kernel supports upto 8 NPAR_loops * 64 (warp_size) * 256
+// (partition size) = 128K context length
+switch (npar_loops) {
+  case 1: LAUNCH_CUSTOM_REDUCTION(1); break;
+  ...
+  case 8: LAUNCH_CUSTOM_REDUCTION(8); break;
+  default: TORCH_CHECK(false, "Unsupported npar_loops: ", npar_loops);
+}
+```
 
-**Confidence: high** on the mechanism, **unverified** end to end. The decisive
-experiment is in `docs/23`.
+8 × 64 × 256 = 131,072 = exactly 128K. **The ceiling is a dispatch table with
+eight entries** — a set of missing template instantiations.
+
+Three consequences, all of which lower the risk this entry assigned:
+
+1. **The failure mode is loud, not silent.** Raising the Python gate without
+   extending the switch aborts on `TORCH_CHECK` with the offending value. The
+   silent-garbage scenario feared above cannot occur through this path.
+2. **`NPAR_LOOPS=16` already compiles and runs.** The RDNA launcher instantiates
+   the same reduce-kernel template at 1..16 today. (That does *not* mean RDNA
+   reaches 256k — its warps are 32 wide, so 16 × 32 × 256 is also 131,072. Both
+   architectures cap at 128K by different arithmetic. What it establishes is
+   that the template body is valid at 16.)
+3. **The resource cost is small.** `NPAR_LOOPS` sizes one shared array and three
+   register arrays. At 16 with `WARP_SIZE=64`: LDS 2,048 → 4,096 bytes against
+   64 KB available; register arrays 24 → 48 VGPRs against 256. Occupancy may
+   drop slightly — a performance question, not a correctness one.
+
+**Patch: `configs/extend_rocm_pa_256k_gfx9.py`.** Adds cases 9–16 to the *gfx9*
+launcher only and raises that branch's gate to `256 * 1024`. The RDNA branch is
+deliberately left at 128k, where its kernel genuinely stops. Verified to apply
+cleanly against upstream `attention.cu`; requires rebuilding the ROCm extension.
+
+**What remains unverified: numerics above 128k.** The instantiation is valid and
+the buffers are sized correctly, but that is an argument, not a measurement.
+`tests/test_rocm_pa_256k.py` is the acceptance criterion — it compares the custom
+kernel against an fp32 dense reference at 131k/139k/196k/262k and asserts that
+266k is *still refused*. The 139,264 case (`npar_loops = 9`) is the load-bearing
+one: it is the first length that requires the patch, so a reduction that silently
+ignores the extra groups shows up there as an order-1 error.
+
+Do not report a throughput number from a patched build until that test passes.
+`docs/14` is the cautionary case — a kernel that ran at full speed and computed
+the wrong thing.
+
+**Confidence: high** on the mechanism and the patch, **unmeasured** on numerics
+and on the actual decode win.
 
 ---
 
