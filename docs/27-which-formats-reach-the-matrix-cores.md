@@ -58,6 +58,31 @@ enabling AITER was measured on **AWQ-Int4**, not on W8A8.
 | AWQ-Int4, stock vLLM | 5.72 s | |
 | AWQ-Int4 + AITER ASM | **5.07 s** | **+12.8%** |
 
+### Confirmed on W8A8, and the win grows with context
+
+`round2.sh` E3 ran the A/B on a **W8A8** model — same weights, same flags, only
+the backend varying. Verified at the kernel level rather than inferred:
+
+| arm | backend | ASM `.co` loaded |
+|---|---|---:|
+| `t70-w8a8` | `ROCM_AITER_FA` | **4** |
+| `t70-w8a8-noaiter` | `ROCM_ATTN` | **0** |
+
+| Llama-3.3-70B W8A8 | AITER | stock | delta |
+|---|---:|---:|---:|
+| prefill @ 15k | 843 t/s | 783 t/s | **+7.7%** |
+| prefill @ 101k | **544 t/s** | 409 t/s | **+33.0%** |
+| TTFT @ 101k | **187.0 s** | 247.9 s | **−24.6%** |
+
+Two conclusions. First, **the ASM win is quantization-independent** — it was
++12.8% on AWQ-Int4 and is +7.7%/+33% on W8A8, exactly as the "it is bf16
+attention" argument predicts.
+
+Second, and more useful: **"+12.8%" was a single-point number at 15k and
+understates the benefit.** The win scales with context, because attention is
+O(n²) and therefore a growing share of prefill work. At 101k it is **+33%**.
+Quote the range, not the point.
+
 So the ASM work is a free win on **every** vLLM arm whose model has
 `head_dim ∈ {128, 192}`. The one thing that gates it is head dimension, not
 format — and Qwen3-Next's `head_dim = 256` gets nothing, because AITER ships no

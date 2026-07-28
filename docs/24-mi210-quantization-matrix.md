@@ -257,8 +257,16 @@ That last one is the subtle one. After the gate patch the log read:
 Overriding with ROCM_ATTN out of potential backends: ['ROCM_ATTN', 'ROCM_AITER_FA', ...]
 ```
 
-AITER present, admitted, **unused**. Worth **+12.8% prefill** once actually
-selected, proven by the code objects loading rather than inferred:
+AITER present, admitted, **unused**. Worth **+8% prefill at 15k rising to +33%
+at 101k** once actually selected, proven by the code objects loading rather than
+inferred:
+
+> **The original "+12.8%" was one point at 15k on AWQ-Int4.** A later A/B on a
+> W8A8 model (`round2.sh` E3, backend and `.co` counts both verified) measured
+> **+7.7% at 15k and +33.0% at 101k**. The win scales with context because
+> attention is O(n²) and takes a growing share of prefill. Two things follow:
+> the ASM benefit is **quantization-independent**, and a single short-prompt
+> number materially understates it. `docs/27`.
 
 ```
 fwd_hd128_bf16_causal_rtna_group.co
