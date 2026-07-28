@@ -62,6 +62,33 @@ echo "ARM $LABEL  tier=$TIER quant=$QUANT engine=$ENGINE"
 echo "  model: $MODEL_DIR"
 echo "=============================================================="
 
+# Wait for the previous arm's port to actually be released before binding it.
+#
+# `docker rm -f` returns before the daemon has torn down the port mapping, so
+# back-to-back arms race: the next `docker run` gets
+#
+#   Bind for 0.0.0.0:8100 failed: port is already allocated
+#
+# and the arm is recorded as "server would not start" with a ZERO-BYTE server
+# log -- indistinguishable at a glance from a model that genuinely cannot load.
+# That is exactly how the 80B W8A8 decode arm was lost: it never created a
+# container at all, and the failure looked like a model problem.
+#
+# Also sweep up any leftover container still holding the port, which `rm -f` in
+# a previous *interrupted* run would not have cleaned.
+for _ in $(seq 1 60); do
+    holder=$(docker ps -q --filter "publish=$PORT" 2>/dev/null)
+    [ -z "$holder" ] && break
+    echo "  port $PORT still held by $holder -- removing and waiting"
+    docker rm -f $holder >/dev/null 2>&1 || true
+    sleep 2
+done
+# Even with no container holding it, the daemon can lag on the mapping.
+for _ in $(seq 1 30); do
+    docker ps -q --filter "publish=$PORT" 2>/dev/null | grep -q . || break
+    sleep 2
+done
+
 case "$ENGINE" in
     # vllm-aiter is the DEFAULT for vLLM arms now: AITER ASM attention measured
     # 12.8% faster prefill than stock ROCM_ATTN on gfx90a, proven by the .co
