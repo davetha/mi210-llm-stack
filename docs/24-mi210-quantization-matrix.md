@@ -28,6 +28,29 @@ passing on every row.
 | AWQ-Int4 | vLLM stock | 15.7 GiB | 5.72 s | 2,661 t/s | — |
 | FP8 | vLLM + AITER | 29.2 GiB | 14.51 s | 1,047 t/s | 9.3 t/s |
 
+### Attribution, stated precisely
+
+The 3.20 s result has **both** patches active — verified from the server log,
+not assumed:
+
+```
+Overriding with ROCM_AITER_FA            <- ASM attention selected
+fwd_hd128_bf16_causal_rtna_group.co      <- ASM kernels actually loaded
+Using TRITON Int8 MoE backend            <- INT8 MoE path reached
+```
+
+So the honest decomposition is:
+
+| Step | TTFT | What varied |
+|---|---:|---|
+| AWQ-Int4, stock vLLM | 5.72 s | — |
+| AWQ-Int4 + AITER ASM attention | 5.07 s | attention only, **+12.8%** |
+| INT8 W8A8 + AITER ASM attention | 3.20 s | quantization only, **+58%** |
+
+The +58% is INT8 versus AWQ **with AITER held constant on both sides**, which
+is the comparison that matters. What is *not* measured is INT8 without AITER,
+so nothing here supports a claim about INT8's standalone contribution.
+
 ### INT8 wins because CDNA2's INT8 peak equals its bf16 peak
 
 gfx90a provides `v_mfma_i32_16x16x16i8` and peaks at **181 TOPS INT8 — the same
