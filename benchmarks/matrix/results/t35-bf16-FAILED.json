@@ -1,9 +1,0 @@
-{
-  "label": "t35-bf16",
-  "tier": "35B",
-  "quant": "bf16",
-  "engine": "vllm-aiter",
-  "status": "FAILED",
-  "reason": "container exited during load",
-  "server_log_tail": "Error response from daemon: No such container: bench-t35-bf16\n"
-}
