@@ -58,5 +58,26 @@ echo "=== $(date -u +%T) E1-redo: 80B W8A8 decode with the fixed prompt ==="
 LONGCTX_TOKENS=110000 "$BIN/run_arm.sh" t80-w8a8-decode 80B w8a8 vllm-aiter "$BASE/t80-w8a8" \
     --tensor-parallel-size 2 --max-model-len 131072 --no-enable-prefix-caching
 
+# ---------------------------------------------------------------------------
+# E5-redo  MoE tuning, which never ran.
+#
+# The original failed with "bin/tune_moe_targeted.sh: No such file or
+# directory" -- the script lives at the bench-matrix root and was never copied
+# into bin/. Same class of failure as E7's missing model path: the experiments
+# were fine, the plumbing was not. Both are now deployed.
+#
+# This matters more than it did before round 2. The TP=2 control showed W8A8
+# decoding at 43.4 t/s against bf16's 62.6 on identical hardware -- backwards,
+# since INT8 halves weight traffic and should WIN a bandwidth-bound decode.
+# The leading explanation is that the Triton INT8 MoE kernel is untuned at
+# batch-1 shapes, and vLLM ships tuned fused_moe configs for MI300X/MI325X and
+# none for MI210. This is the experiment that tests it.
+#
+# Bounded to batch sizes 1 and 64: the full sweep grew 704 -> 2,660 -> 4,990 ->
+# 7,810 candidates and would eat a day per tier.
+# ---------------------------------------------------------------------------
+echo "=== $(date -u +%T) E5-redo: targeted MoE tuning ==="
+"$BIN/tune_moe_targeted.sh" || echo "E5-redo did not complete -- continuing"
+
 echo "=== $(date -u +%T) followup complete ==="
 python3 "$BIN/summarize_results.py" "$BASE/results" 2>/dev/null || true
