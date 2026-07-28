@@ -117,11 +117,77 @@ for the fallback warning before "startup complete"; and bisect `max-model-len`
 across 131072 to confirm the cliff is a step at exactly that boundary rather
 than a gradient.
 
+## RESOLVED — the ceiling was a switch statement
+
+**Update 2026-07-28.** The "why 128k" question this document leaves open has a
+concrete answer, and it is smaller than expected. From `csrc/rocm/attention.cu`:
+
+```c
+const int npar_loops = DIVIDE_ROUND_UP(max_num_partitions, WARP_SIZE);
+// reduction kernel supports upto 8 NPAR_loops * 64 (warp_size) * 256
+// (partition size) = 128K context length
+switch (npar_loops) {
+  case 1: LAUNCH_CUSTOM_REDUCTION(1); break;
+  ...
+  case 8: LAUNCH_CUSTOM_REDUCTION(8); break;
+  default: TORCH_CHECK(false, "Unsupported npar_loops: ", npar_loops);
+}
+```
+
+8 × 64 × 256 = 131,072 exactly. **Missing template instantiations, not a
+correctness or memory limit.** `configs/extend_rocm_pa_256k_gfx9.py` adds cases
+9–16 to the gfx9 launcher and raises that branch's gate to 262,144.
+
+**Numerically verified** — `tests/test_rocm_pa_256k.py`, custom vs Triton, with
+an explicit assertion that the gate selected the custom path:
+
+| seq_len | `npar_loops` | stock | patched |
+|---:|---:|---|---|
+| 131,072 | 8 | PASS `6.62e-03` | PASS `6.62e-03` |
+| 139,264 | 9 | gate declined | **PASS `4.15e-03`** |
+| 262,144 | 16 | gate declined | **PASS `5.29e-03`** |
+| 266,240 | 17 | declined | **still declined** |
+
+Identical control on both builds; exactly the patched lengths fail on stock; the
+ceiling still holds at 17. Details in `docs/25` item 2.
+
+**This does not close the row above.** The unverified claim is that the
+*capture-time warning was actually emitted* — that the causal chain runs end to
+end rather than merely being readable in the source. Raising the gate is
+consistent with the diagnosis but does not demonstrate it: if the cliff were
+caused by something else that also keys off `max_model_len`, this patch could
+still remove it. `benchmarks/matrix/round2.sh` E9 is the measurement, against
+the concrete baseline of **0.7485 t/s at 241k** (two reps, 0.7468 / 0.7502).
+
+### Who this patch does and does not help
+
+The same gate filters on head size:
+
+```python
+and (head_size == 64 or head_size == 128)
+```
+
+So **`head_dim = 256` models never reach the custom kernel at any context
+length** — Qwen3-Next-80B decodes on Triton always, patched or not. This is the
+second independent place that `head_dim = 256` costs this architecture a fast
+path; the first is AITER's ASM attention, which ships only `hd128`/`hd192`
+(`docs/25` item 7). Beneficiaries are the `head_dim` 64/128 models: the 30B
+Qwen3, Llama-3.3, Gemma-3, Mistral-Small, GLM-4.6.
+
+**And that raises a caveat on the causal story worth stating plainly.** The 80B
+decodes at **51.3 t/s at 101k on the Triton path**, so Triton decode is not
+inherently catastrophic. The 30B's 0.7485 t/s at 241k differs in two ways at
+once — 2.4× the context, and full attention on all 48 layers against the 80B's
+12-of-48 GDN hybrid. So "the cliff is the Triton fallback" is the documented
+mechanism, not a demonstrated sufficient cause; part of the gap could be context
+scaling that would exist regardless of kernel. E9 separates them by changing
+only the image.
+
 ## Upstream
 
-Worth reporting. Either raise the gfx9 threshold, or evaluate the gate during
-capture against a representative runtime length, or make the captured graph's
-attention dispatch metadata-driven rather than baked. Closest existing issue is
+Worth reporting, and the report is now concrete: extend the gfx9 reduction
+dispatch past 8 cases. That is strictly simpler than the three options below,
+which were written before the cause was known. Closest existing issue is
 [#44014](https://github.com/vllm-project/vllm/issues/44014) — a 10x decode
 cliff from cudagraph mode on a hybrid Mamba+MoE model, same symptom and
 magnitude, different model class.
