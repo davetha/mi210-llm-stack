@@ -239,5 +239,30 @@ else
     echo "E9 skipped: rocm-vllm-aiter-gfx90a:pa256k not built"
 fi
 
+# ---------------------------------------------------------------------------
+# E10  Re-run the loader probes on an idle box.
+#
+# All three were run while the bf16 arm held both cards, and round 3 came back
+# incoherent: `empty + copy_` interleaved measured 12,000x FASTER than the copy
+# alone, and the slow figure landed on 1001.29 / 1000.98 ms -- essentially
+# exactly 1.000 s across independent runs. Costs that scale with data do not do
+# that. Whatever was measured was contention, not the loader.
+#
+# This runs last precisely because that is when nothing else holds a GPU. What
+# it needs to settle: line 771 sustains 21.7 GB/s unobstructed, yet the real
+# TP=2 load moves ~2.2 MB/s per rank. That gap is still unexplained, and three
+# hypotheses (storage, strided copies, allocation) are now eliminated.
+# ---------------------------------------------------------------------------
+banner "E10  loader probes on an idle box (round 3 was confounded by bf16)"
+for p in probe_loader.py probe_loader2.py probe_loader3.py; do
+    echo "--- $p ---"
+    docker run --rm --device /dev/kfd --device /dev/dri \
+        --group-add 44 --group-add 991 --ipc host --shm-size 8g \
+        -e HSA_NO_SCRATCH_RECLAIM=1 \
+        -v /mnt/llm-storage:/models:ro -v "$BIN":/bin2:ro \
+        --entrypoint python3 rocm-vllm-aiter-gfx90a:latest "/bin2/$p" 2>&1 \
+        | grep -vE "^INFO|importing.py"
+done
+
 banner "round 2 complete"
 python3 "$BIN/summarize_results.py" "$BASE/results"

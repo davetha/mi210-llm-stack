@@ -136,12 +136,61 @@ mmap'd source, or both. The `contiguous()` fix targeted exactly this and did
 nothing, which means the strided-source hypothesis in its docstring is wrong or
 incomplete.
 
-**Next probe, and it is cheap:** time a single `expert_data.copy_(loaded_weight)`
-in isolation against the same copy with the source first materialised via
-`torch.empty_like().copy_()` on CPU, and against a plain
-`loaded_weight.to(device)`. That separates "the H2D transfer is slow" from "the
-CPU-side read of the mmap is slow", which the current profile cannot distinguish
-— `copy_` blocks on both and `py-spy` attributes the whole wait to line 771.
+### The probe ran, and it refutes the copy hypothesis — but is itself confounded
+
+`benchmarks/matrix/bin/probe_loader{,2,3}.py`. Three rounds, and the honest
+summary is that **line 771 is not slow, and I do not yet know what is.**
+
+**Round 1 — the copy is fast.** With a preallocated destination and a
+materialised source:
+
+| operation | rate |
+|---|---:|
+| `dst.copy_(strided slice)` — *line 771* | **21,713 MB/s** |
+| `dst.copy_(contiguous src)` | 22,067 MB/s |
+| pinned H2D (ceiling) | 23,425 MB/s |
+
+Line 771 runs at 93% of the pinned-memory ceiling. It is **not** a per-element
+gather. Two incidental findings: `narrow(dim=0, ...)` on a row-major 2-D tensor
+is **already contiguous**, so the refuted `contiguous()` patch was a no-op for a
+second independent reason; and the strided and contiguous paths are within 2% of
+each other, so the docstring's stated rationale is wrong.
+
+**Round 2 — the slowdown reproduces.** Iterating real expert tensors:
+**1.6 MB/s effective**, against ~2.2 MB/s observed in the live load. Same
+phenomenon. 100% of the time in `torch.empty(device) + copy_`, ~1001 ms/tensor.
+
+**Round 3 — and it falls apart.** Splitting allocation from copy:
+
+| operation | ms/tensor |
+|---|---:|
+| `torch.empty(device)` only | 0.01 |
+| `copy_` into preallocated buffers | **1001.29** |
+| `empty + copy_` **interleaved** | **0.08** |
+| pooled buffer reuse | 0.07 |
+
+**The interleaved case — strictly more work — is 12,000× faster than the
+isolated copy.** That is not a real cost structure. Two tells:
+
+1. The slow figure is **1001.29 ms and 1000.98 ms** across independent runs:
+   essentially exactly 1.000 s. Costs that scale with data do not land on a
+   round number twice.
+2. Whichever operation runs **first** is slow; everything after is fast.
+
+**The confound is stated rather than explained away: a bf16 arm was loading on
+both cards throughout.** A ~1 s stall on first GPU touch under contention is a
+far better fit than any property of `copy_`. So round 3 measures the test
+conditions, not the loader.
+
+**What survives:** line 771 sustains ~21.7 GB/s when unobstructed, so the
+"strided copy degrades to a gather" story in the code comment is **wrong**, and
+the ~2.2 MB/s effective rate of the real load remains unexplained.
+
+**What is needed: a clean box.** Re-run all three probes with no other GPU work,
+and re-profile a TP=2 load with `py-spy --native` so C-level frames are visible —
+a pure-Python profile cannot see a stall inside a HIP call. Until then, do not
+attribute the loader cost to `copy_`, to allocation, or to storage. Three
+hypotheses have now been eliminated; the fourth is not yet in hand.
 
 **The fix did not work.** `configs/fast_moe_expert_load.py` makes each narrowed
 slice contiguous before the host-to-device copy. Measured on 235B GPTQ-Int4 at
