@@ -21,12 +21,48 @@ passing on every row.
 
 | Quant | Engine | Weights | TTFT | Prefill | Decode @ ~100k |
 |---|---|---:|---:|---:|---:|
+| bf16 **(TP=2 — see below)** | vLLM + AITER | 28.5 GiB/rank | **2.03 s** | **7,578 t/s** | **62.6 t/s** |
 | **INT8 W8A8** | vLLM + AITER | **29.2 GiB** | **3.20 s** | **4,739 t/s** | **33.8 t/s** |
 | Q4_K_M | llama.cpp | ~18 GB | 4.43 s | 3,416 t/s | — |
 | Q8_0 | llama.cpp | ~31 GB | 4.57 s | 3,326 t/s | 30.4 @ **230k** |
 | AWQ-Int4 | vLLM + AITER | 15.7 GiB | 5.07 s | 3,002 t/s | 17.2 t/s |
 | AWQ-Int4 | vLLM stock | 15.7 GiB | 5.72 s | 2,661 t/s | — |
 | FP8 | vLLM + AITER | 29.2 GiB | 14.51 s | 1,047 t/s | 9.3 t/s |
+
+### The bf16 row is two cards, and it is not comparable to the rest
+
+**Every other row in that table is TP=1. bf16 is TP=2**, because 57 GiB of
+weights will not share a 64 GB card with a KV cache. So its 7,578 t/s — the
+highest number anywhere in this matrix, above even the 80B's 6,679 — is two
+cards against one, and quoting it beside the W8A8 row compares hardware, not
+quantization. This is the same error `docs/26` corrects for tier 2.
+
+What makes it interesting is the **per-card footprint**:
+
+| | bf16 TP=2 | W8A8 TP=1 |
+|---|---:|---:|
+| weights **per card** | 28.51 GiB | 29.17 GiB |
+| KV cache | 28.12 GiB | 27.23 GiB |
+| **KV tokens** | **614,304** | 297,472 |
+| **model load** | **12,366 s (3.4 h)** | **123 s** |
+
+**bf16 at TP=2 occupies almost exactly the same per-card memory as W8A8 at
+TP=1** — 28.5 against 29.2 GiB. Halving the bytes and doubling the cards lands
+in the same place. The bf16 arm then gets 2.07× the KV tokens because it has two
+cards' worth of KV, and roughly 1.6× prefill / 1.85× decode, which is about what
+doubling the hardware should buy.
+
+So the defensible reading is not "bf16 beats W8A8". It is:
+
+> **W8A8 delivers a comparable per-card footprint on half the hardware, and
+> loads 100× faster** (123 s against 3.4 hours).
+
+Whether W8A8 *also* wins at equal TP is not answerable from this table — no
+W8A8 arm has run at TP=2. `benchmarks/matrix/round2.sh` E0 is exactly that arm,
+and it is the control this matrix should have had from the start.
+
+The 3.4-hour load is its own finding, and it is not I/O: see `docs/25` item 1,
+where `py-spy --native` puts the loader in `hsakmt_ioctl`.
 
 ### Attribution, stated precisely
 
