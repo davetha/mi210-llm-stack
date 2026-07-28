@@ -9,57 +9,39 @@ Ordered by expected value, not by effort.
 
 ---
 
-## 1. vLLM's per-expert MoE loader: ~3 hours becomes minutes
+## 1. vLLM's per-expert MoE loader — attempted, REFUTED
 
-**Evidence.** Loading Qwen3-30B-A3B bf16 at TP=2 takes **697 s per shard**, ~3
-hours for 61 GB, while the same file reads at **3.0 GB/s** (measured with `dd`).
-`py-spy` on the pinned worker:
+**Evidence for the cost is solid.** Loading Qwen3-30B-A3B bf16 at TP=2 takes
+697 s/shard and Qwen3-235B GPTQ-Int4 takes 810 s/shard, while the same files
+read at 3.0 GB/s under `dd`. `py-spy` put every sample in `_load_w13`.
 
-```
-_load_w13 (vllm/model_executor/layers/fused_moe/layer.py:762)
-weight_loader (layer.py:1138)
-load_weights (models/qwen3_moe.py:627)
-```
+**The fix did not work.** `configs/fast_moe_expert_load.py` makes each narrowed
+slice contiguous before the host-to-device copy. Measured on 235B GPTQ-Int4 at
+TP=2, patch verified present in the container:
 
-The hot line is:
+| | s/shard |
+|---|---:|
+| without patch | 810.49 |
+| **with patch** | **810.81** |
 
-```python
-loaded_weight = loaded_weight.narrow(shard_dim, start_offset, narrow_size)
-...
-expert_data.copy_(loaded_weight)
-```
+Identical. Source-side contiguity is not the cost.
 
-`narrow()` produces a **non-contiguous** view, and the copy runs once per expert
-per layer — 128 × 48 = 6,144 host→device copies of strided memory. The narrowing
-only happens when `tp_size > 1`.
+**What this rules in and out.** The hot function is right; the mechanism is
+wrong. The patch's own closing note named the next suspect and it now looks
+like the live one: `expert_data` is itself a narrowed **device** tensor, so the
+*destination* may be a scatter. That was left alone on the assumption the host
+side dominated — an assumption this measurement refutes.
 
-**Proposed.** Make the source contiguous before the copy (`.contiguous()` on the
-narrowed view), or batch expert copies into one transfer per layer. Either turns
-6,144 strided PCIe transfers into far fewer contiguous ones.
+Also note the earlier framing error, already corrected: TP>1 is not sufficient
+to trigger this. `compressed-tensors` loads fast at TP=2 (GLM-4.6: 9.11 s/it),
+while bf16 and GPTQ are slow. Whatever the real cost is, it is quant-method
+specific.
 
-**How this could be wrong.** `.contiguous()` allocates — on a 61 GB model that
-could OOM host RAM if done carelessly, and the current code may be strided
-deliberately to keep peak memory low. Measure peak RSS alongside load time.
+**Practical consequence, independent of the fix:** a 235B at TP=2 on this
+hardware costs ~7 hours to load. That is not a benchmark artifact, it is the
+deployment reality, and it makes vLLM impractical for that tier here.
 
-**Confidence: high** that the cost is real and here. **Medium** that the fix is
-this simple.
-
-**Update (2026-07-28): implemented as `configs/fast_moe_expert_load.py`.** Two
-things came out of building it that the entry above got wrong:
-
-- The OOM worry was overstated. `.contiguous()` here materialises **one
-  expert's slice** — single-digit MB — not the whole tensor, so peak memory is
-  not the risk I described.
-- There are **five** call sites, not one, at three different indentation
-  depths. The 8-space pattern is a *substring* of the 12- and 16-space ones, so
-  a naive match collides across sites and corrupts the indentation it inserts.
-  Every pattern is anchored on a leading newline.
-
-**The framing above is too broad, and I nearly mis-validated the fix.** Load
-rate by quant method, TP, and arm:
-
-| Arm | TP | Quant method | Load rate |
-|---|---|---|---|
+---|---|---|---|
 | 30B bf16 | 2 | none (bf16) | **697 s/shard** |
 | 235B GPTQ-Int4 | 2 | gptq | **810 s/shard** |
 | 80B AWQ | 1 | compressed-tensors | 1.10 s/it |

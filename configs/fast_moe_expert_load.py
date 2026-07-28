@@ -1,5 +1,23 @@
 """Make vLLM's per-expert MoE weight load fast at TP>1.
 
+>>> REFUTED (2026-07-28). This patch does NOT fix the load cost. <<<
+>>>
+>>> Measured on Qwen3-235B GPTQ-Int4 at TP=2, with the patch verified present
+>>> in the running container (5 call sites):
+>>>
+>>>     with patch:     810.81 s/shard
+>>>     without patch:  810.49 s/shard
+>>>
+>>> Identical. The strided-copy hypothesis is grounded -- py-spy put every
+>>> sample in _load_w13 on the 30B bf16 TP=2 run -- but source-side contiguity
+>>> is not what costs the time. Kept in the tree as a recorded negative and
+>>> because reverting is one flag; do not cite it as a fix.
+>>>
+>>> Next suspect, from the note at the bottom of this file: expert_data is
+>>> itself a narrowed DEVICE tensor, so the destination may be a scatter. That
+>>> was left alone on the assumption the host side dominated. It evidently
+>>> does not.
+
 Loading a MoE checkpoint with tensor parallelism is pathologically slow, and it
 is not I/O. Measured on 2x MI210:
 
