@@ -58,10 +58,17 @@ minutes versus hours, because the slow loader runs per expert per weight
 | `quant_method` | Loader | Measured on a MoE |
 |---|---|---|
 | `compressed-tensors` (`int-quantized`) | fast path | **122.8 s** — 30B W8A8, TP=1 |
-| `compressed-tensors` (`pack-quantized`) | fast path | **183.7 s** — 80B W8A16, TP=2 |
-| `awq` | AWQ loader | served fine — 30B AWQ-Int4 |
+| `compressed-tensors` (`pack-quantized`) | fast path | **160–184 s** — 80B, TP=1 and TP=2 |
+| `awq` | `moe_wna16_weight_loader` | served — 30B AWQ-Int4, 48L (**scales badly**) |
 | `gptq` / `gptqmodel` | `moe_wna16_weight_loader` | **>46 min, never reached serving** |
 | _(none — bf16)_ | `_load_w13` | **697 s per shard** at TP=2 |
+
+**`awq` and `gptq` share the slow loader** — `moe_wna16_weight_loader` calls
+`convert_awq_tensor` or the gptq equivalent per expert per weight. The 30B AWQ
+survived it because 48 layers × 128 experts at 16 GB is small enough; that is not
+a property of AWQ, it is a property of *that model's size*. Expect a plain-`awq`
+235B (94 layers, 124 GB) to be slow for the same reason GPTQ was, and do not read
+the tier-1 AWQ row as evidence it will not be.
 
 The GPTQ figure is not a timeout artifact. `py-spy` puts every sample in
 
@@ -85,6 +92,20 @@ statement about GPTQ's accuracy.
 A 235B at TP=2 through the GPTQ loader costs **~7 hours to load**. That is not a
 benchmark artifact, it is the deployment reality, and it is why tier 3 has no
 throughput row.
+
+**Tier 3 has no good answer on this box, and it is worth saying why rather than
+leaving the cell blank.** The three candidates each fail differently:
+
+| Candidate | Size | Packaging | Problem |
+|---|---:|---|---|
+| `Qwen/Qwen3-235B-A22B-GPTQ-Int4` | 117 GB | `gptq` | ~7 h load — measured |
+| `QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ` | 124 GB | `awq` | same loader; also 62 GB/card leaves almost no KV |
+| `RedHatAI/Qwen3-235B-A22B-Instruct-2507-quantized.w8a8` | 239.5 GB | `compressed-tensors` ✓ | **both axes right**, but will not fit — needs ~112 GB in RAM |
+
+The frustrating part is that the one with correct packaging is the one that does
+not fit. A `compressed-tensors` **4-bit** 235B would fit *and* load fast; none is
+published. Until one is, tier 3 is a gap in the hardware's coverage, not a gap in
+the measurements.
 
 ---
 
