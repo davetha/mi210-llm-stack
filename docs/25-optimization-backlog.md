@@ -115,29 +115,55 @@ experiment is in `docs/23`.
 
 ---
 
-## 3. `global_atomic_pk_add_bf16` emulation — the largest blocked kernel class
+## 3. `global_atomic_pk_add_bf16` emulation — CLOSED, not substitutable
 
-**Evidence.** Of 1,422 gfx942 AITER kernels, **539 are blocked solely by
-`global_atomic_pk_add_bf16`**, which CDNA2 lacks. That is by far the biggest
-single category in `docs/19` — larger than FP8 and gfx942-INT8 combined.
+**539 of 1,422 blocked kernels** need this one instruction — the largest single
+category, bigger than FP8 and gfx942-INT8 combined. Worth checking properly, and
+the answer is definitive.
 
-**Proposed.** The operation is an atomic packed bf16 add. It can be emulated
-with a `global_atomic_cmpswap` loop on the 32-bit container: load, unpack, add
-two bf16 lanes, pack, CAS, retry on failure. If that sequence assembles for
-gfx90a and matches encoding length constraints, `repatch_gfx942_to_gfx90a.py`
-could grow a substitution rule that expands one instruction into a loop.
+Real syntax taken from a shipped kernel rather than guessed
+(`bf16gemm_fp32bf16_tn_128x64_bshuffle_splitk.co`):
 
-**How this could be wrong.** This is the least certain entry here.
-- The repatcher currently requires **same-length** encodings, and a CAS loop is
-  many instructions replacing one. That means relocating code, not substituting
-  it — a fundamentally harder transform than everything done so far.
-- Atomics are used for cross-workgroup reduction; a CAS loop changes the
-  performance profile enormously under contention and could be slower than the
-  CK fallback it replaces.
-- Correctness under concurrency is exactly where silent wrongness hides.
+```
+global_atomic_pk_add_bf16 v4, v76, s[16:17]   // DD488000 00104C04
+```
 
-**Confidence: low** on feasibility, **high** on payoff if feasible. Prototype in
-isolation with a contention stress test before touching the repatcher.
+Assembler verdicts:
+
+| Instruction | gfx942 | gfx90a |
+|---|---|---|
+| `global_atomic_pk_add_bf16` | **8 bytes** | **rejected** |
+| `global_atomic_cmpswap` | — | 8 bytes |
+| `global_load_dword` | — | 8 bytes |
+| `v_add_f32_e32` | — | 4 bytes |
+| `v_cmp_eq_u32_e32` | — | 4 bytes |
+
+So gfx90a *has* every primitive a CAS loop needs. The emulation is expressible:
+load the 32-bit container, unpack two bf16 lanes, add, repack, `cmpswap`,
+compare and retry.
+
+**It still cannot be done as a substitution.** The minimal loop is roughly
+load (8) + unpack (~8-16) + two adds (8) + repack (~8-16) + cmpswap (8) +
+compare-and-branch (8) — **60-80 bytes replacing 8**. `repatch` requires
+identical encoding length for a reason that is not fussiness: these are
+prebuilt code objects with no linker involved, so growing an instruction shifts
+every subsequent address and silently breaks every branch target and relocation
+in the object. An 8-to-80-byte expansion is relocation, not substitution.
+
+The two routes that remain are both worse than the fallback they would replace:
+
+- **Trampoline out to a helper.** Requires free space, a call/return convention
+  inside a hand-written ASM kernel that assumes full register control, and
+  patching the branch. Very high risk of silent corruption in exactly the code
+  paths where correctness is hardest to observe.
+- **Recompile from source.** These are prebuilt ASM blobs. There is no source.
+
+And even if it worked, the performance argument is against it: these atomics
+are cross-workgroup reduction points, so a CAS retry loop under contention could
+easily be slower than the CK path already running.
+
+**Verdict: closed.** The 242/1,422 ceiling is not conservative — it is the real
+boundary for instruction-level translation, and this category is the reason.
 
 ---
 
