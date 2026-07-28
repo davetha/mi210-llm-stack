@@ -254,7 +254,7 @@ fi
 # hypotheses (storage, strided copies, allocation) are now eliminated.
 # ---------------------------------------------------------------------------
 banner "E10  loader probes on an idle box (round 3 was confounded by bf16)"
-for p in probe_loader.py probe_loader2.py probe_loader3.py; do
+for p in probe_loader.py probe_loader2.py probe_loader3.py probe_loader4.py; do
     echo "--- $p ---"
     docker run --rm --device /dev/kfd --device /dev/dri \
         --group-add 44 --group-add 991 --ipc host --shm-size 8g \

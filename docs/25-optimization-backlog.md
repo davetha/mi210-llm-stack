@@ -186,11 +186,55 @@ conditions, not the loader.
 "strided copy degrades to a gather" story in the code comment is **wrong**, and
 the ~2.2 MB/s effective rate of the real load remains unexplained.
 
-**What is needed: a clean box.** Re-run all three probes with no other GPU work,
-and re-profile a TP=2 load with `py-spy --native` so C-level frames are visible —
-a pure-Python profile cannot see a stall inside a HIP call. Until then, do not
-attribute the loader cost to `copy_`, to allocation, or to storage. Three
-hypotheses have now been eliminated; the fourth is not yet in hand.
+### ROOT CAUSE: it is blocked in a kernel-driver ioctl
+
+`py-spy --native` on the live TP=2 load. **Eight consecutive samples, all
+identical:**
+
+```
+ioctl (libc.so.6)
+hsakmt_ioctl (libhsa-runtime64.so.1)
+_load_w13 (vllm/model_executor/layers/fused_moe/layer.py:771)
+```
+
+The worker is blocked in an **HSA thunk ioctl into the amdgpu/KFD driver** — not
+in memcpy, not in DMA, not in page faults. Every prior profile in this document
+was taken *without* `--native`, which is why they all "proved" line 771 was the
+cost: a pure-Python profile cannot see inside a HIP call and attributes the
+entire wait to the last Python frame.
+
+**This is the single most important lesson from the whole loader investigation.**
+Four hypotheses were eliminated — storage, strided copies, allocation, and
+`copy_` itself — and each was eliminated by measurement while the *actual* cause
+sat one stack frame below where the profiler could see.
+
+**Mechanism this implies.** Each expert tensor is a **fresh mmap'd host region**,
+so every `copy_` must register/map that region with the driver before it can DMA
+from it. Registration is an ioctl with a large fixed cost, and the ~3.2 MB
+payload is irrelevant beside it. That single mechanism accounts for every
+observation that previously looked contradictory:
+
+| Observation | Explained by |
+|---|---|
+| Line 771 hits 21.7 GB/s in probe 1 | source was materialised, already registered |
+| First touch slow, reuse fast (probe 3) | registration happens once |
+| ~1000 ms constants regardless of size | fixed ioctl cost, not bandwidth |
+| Shard times rising 697 → 822 s | registration table growing |
+| Pinned memory fastest in probe 1 | pinned is registered at allocation |
+| `contiguous()` patch did nothing | never addressed registration |
+
+**Candidate fix, and it is cheap:** copy through **one reused pinned staging
+buffer** instead of DMA'ing from each fresh mmap'd slice — registration once
+rather than 18,432 times. Probe 3's pooled-reuse case already hit 0.07 ms/tensor
+by accident.
+
+`benchmarks/matrix/probe_loader4.py` tests exactly this (direct vs staged vs
+registration-warm), and `round2.sh` E10 runs it on an idle box. **Not yet
+measured** — the mechanism is strongly evidenced but the fix is not.
+
+**Confidence: high** that the block is in driver ioctls (8/8 native samples),
+**medium** that it is specifically memory registration, **unmeasured** on the
+fix.
 
 **The fix did not work.** `configs/fast_moe_expert_load.py` makes each narrowed
 slice contiguous before the host-to-device copy. Measured on 235B GPTQ-Int4 at
