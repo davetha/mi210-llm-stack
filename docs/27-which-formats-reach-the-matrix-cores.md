@@ -195,6 +195,49 @@ neither is measured. Do not quote a number until one exists.
 
 ---
 
+## 4. `head_dim = 256` reaches none of the fast paths — and still wins
+
+Worth isolating, because it is the most counter-intuitive result in the matrix.
+
+Qwen3-Next-80B has `head_dim = 256`. Enumerating what that costs it on ROCm:
+
+| Fast path | Available at `head_dim 256`? | Why |
+|---|---|---|
+| AITER ASM attention | **no** | AITER ships fmha ASM for `hd128`/`hd192` only — upstream, every architecture |
+| ROCm custom paged attention | **no** | `CALL_CUSTOM_LAUNCHER` instantiates `head_size` **64 and 128** only; `default: TORCH_CHECK(false, "Unsupported head size")` |
+| The 256k reduction patch | **no** | same gate — it never reaches the custom kernel to begin with |
+| INT8 MFMA GEMM | yes | GEMM does not depend on head dim |
+
+Both attention gaps are **upstream instantiation gaps, not misapplied
+platform checks.** This is the distinction that matters when triaging: the Int8
+MoE bug was a working kernel behind a bad `is_cuda()` test, and widening it
+turned the slowest arm into the fastest. Here the Python gate
+(`head_size == 64 or head_size == 128`) describes the C++ dispatch exactly.
+Widening it produces `TORCH_CHECK(false, "Unsupported head size: 256")`, not
+speed. Instantiating `HEAD_SIZE=256` is not a drop-in either — the QKV kernel's
+LDS tiling (`shared_logits[NWARPS][4][16][4]`) and register budget are written
+around the supported head dims.
+
+**So the 80B decodes on Triton, always, with every ROCm attention fast path
+unavailable to it — and it is still the fastest arm in this matrix**: 2.27 s
+TTFT at 15k, 51.3 t/s decode at 101k.
+
+That is worth sitting with. It means the tier-2 result is **entirely
+architectural** — 3B active parameters and a 3:1 Gated DeltaNet hybrid that
+keeps only 12 of 48 layers holding KV (10.4 GiB at TP=1, 1.28 M tokens in
+14.9 GiB at TP=2). None of the kernel work in this repo touched it.
+
+Two conclusions follow, pulling in opposite directions, and both are real:
+
+- **Kernel optimization has a ceiling that model choice does not.** The AITER
+  ASM work is worth +12.8%; picking a hybrid-attention model is worth more than
+  that at long context, and it composes with everything else.
+- **The 80B has the most headroom left of anything measured**, precisely
+  because none of the fast paths apply. An `hd256` fmha kernel or an
+  `HEAD_SIZE=256` paged-attention instantiation would benefit the one model that
+  currently gets nothing — which is a better argument for that work than the
+  +12.8% ceiling suggests on its own.
+
 ## Summary
 
 | Idea | Verdict |
@@ -205,3 +248,5 @@ neither is measured. Do not quote a number until one exists.
 | AITER ASM helps only W8A8 | **Wrong** — it is bf16 *attention*, helps every format at `head_dim` 128/192; the +12.8% was measured on AWQ-Int4 |
 | AITER ASM INT8 GEMM | **Does not exist on gfx90a** — `i8gemm` is 0 of 9 portable |
 | W4A8-int8 | **Sound idea, no kernel.** Needs a Triton w4a8-int kernel written; not a gate patch |
+| Custom paged attention at `head_dim 256` | **No kernel** — `head_size` 64/128 only. The gate is accurate, not conservative |
+| The 80B's speed came from kernels | **No** — it reaches *none* of the ROCm attention fast paths and still wins. Purely architectural |
