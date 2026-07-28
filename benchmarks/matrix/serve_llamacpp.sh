@@ -39,6 +39,14 @@ if [ -d "$MODEL" ]; then
     MODEL="$FOUND"
 fi
 
+# 999 keeps every layer on GPU, which is right whenever the model fits.
+# NGL=auto drops the flag so llama.cpp does its own fitting.
+if [ "${NGL:-999}" = "auto" ]; then
+    NGL_FLAG=""
+else
+    NGL_FLAG="--n-gpu-layers ${NGL:-999}"
+fi
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
 docker run -d --name "$NAME" \
@@ -57,7 +65,13 @@ docker run -d --name "$NAME" \
     --model "${MODEL/#$HOST_MODELS//models}" \
     --alias bench \
     --host 0.0.0.0 --port 8000 \
-    --n-gpu-layers 999 \
+    ${NGL_FLAG} \
+    `# NGL=auto omits --n-gpu-layers entirely so llama.cpp fits the model to` \
+    `# free VRAM itself. Forcing 999 DISABLES that fitting -- it aborts with` \
+    `# "n_gpu_layers already set by user to 999, abort" and then OOMs trying` \
+    `# to place every layer. Correct for models that fit; wrong for the ~400B` \
+    `# tier, which is chosen precisely because it does NOT fit and must page` \
+    `# experts into system RAM.` \
     --ubatch-size 2048 \
     --flash-attn on \
     --parallel 1 \

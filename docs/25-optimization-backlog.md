@@ -211,10 +211,29 @@ forgotten, not because it is likely.
 `asm_mla.cu:863` (see `docs/19`). vLLM gates MLA to gfx950, so reaching them
 needs the same treatment as `enable_vllm_aiter_gfx90a.py` gave attention.
 
-**How this could be wrong.** No MLA model is in the current matrix — DeepSeek-V3
-class. Zero value until one is being served, and the 235B/GLM arms are GQA.
+**A prior claim here was retracted, and it matters.** `docs/14` originally
+reported MLA ASM *working* on gfx90a at "3M tok/s prefill, 0.090 ms/step decode,
+3x faster than Triton". That doc is now SUPERSEDED for two reasons, both traps:
 
-**Confidence: high** it works, **low** priority absent an MLA workload.
+- The binary patch was **wrong**. It swapped `D3E1 → D3CD` — bf16 MFMA to
+  **f16** MFMA. gfx90a *does* have BF16 MFMA: `v_mfma_f32_16x16x16bf16_1k`,
+  opcode **D3E7**. D3CD is a perfectly valid instruction that computes the
+  wrong thing, so the kernel ran at full speed and produced garbage. Those
+  scripts are quarantined in `configs/attic/`.
+- The throughput was **mis-attributed**. `mha.py` and `mla.py` gate their ASM
+  paths to gfx942/gfx950, so those runs measured the CK or Triton fallback.
+  The numbers were real; the attribution was not.
+
+So MLA is genuinely *unenabled*, not "already done" — do not read `docs/14` as a
+completed result. The 11 portable kernels are what `repatch` proved translatable
+by re-assembling, which is a different and much stronger claim than an opcode
+swap.
+
+**How this could be wrong.** No MLA model is in the current matrix — DeepSeek-V3
+class. Zero value until one is being served; the 235B and GLM arms are GQA.
+
+**Confidence: high** that the kernels translate, **low** priority absent an MLA
+workload, **zero** in any performance figure predating the port matrix.
 
 ---
 
@@ -227,6 +246,8 @@ class. Zero value until one is being served, and the 235B/GLM arms are GQA.
 | Enable `should_moe_wna16_use_cuda` | Gate is **correct**: `torch.ops._moe_C` has no wna16 op in the ROCm build. Forcing it crashes. |
 | Widen the AITER master gate | Admits gfx90a to FP8 GEMM on a chip with no FP8 ALU. Attention-only is deliberate. |
 | FP8 on CDNA2 | 2.9x slower than AWQ-Int4. No ALU; every weight upcasts to bf16. |
+| Opcode-swap binary patching (`D3E1 → D3CD`) | **Silent garbage.** D3CD is f16 MFMA; gfx90a's bf16 is D3E7. Superseded by `repatch_gfx942_to_gfx90a.py`, which re-assembles and lets the assembler prove portability. Quarantined in `configs/attic/`. |
+| Any ASM performance figure predating the port matrix | **Mis-attributed.** `mha.py`/`mla.py` gated ASM to gfx942/gfx950, so gfx90a runs measured the CK or Triton fallback while being reported as ASM. |
 
 The first three all *looked* like the INT8 bug — an `is_cuda()`/`is_rocm()` check
 standing between AMD hardware and a working kernel. Two were correct and one was
