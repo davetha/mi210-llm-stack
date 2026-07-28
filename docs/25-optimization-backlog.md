@@ -44,6 +44,19 @@ deliberately to keep peak memory low. Measure peak RSS alongside load time.
 **Confidence: high** that the cost is real and here. **Medium** that the fix is
 this simple.
 
+**Update (2026-07-28): implemented as `configs/fast_moe_expert_load.py`.** Two
+things came out of building it that the entry above got wrong:
+
+- The OOM worry was overstated. `.contiguous()` here materialises **one
+  expert's slice** — single-digit MB — not the whole tensor, so peak memory is
+  not the risk I described.
+- There are **five** call sites, not one, at three different indentation
+  depths. The 8-space pattern is a *substring* of the 12- and 16-space ones, so
+  a naive match collides across sites and corrupts the indentation it inserts.
+  Every pattern is anchored on a leading newline.
+
+Awaiting validation on the 235B arm, whose 810 s/shard is the baseline to beat.
+
 ---
 
 ## 2. The 128k graph-capture gate — unlock fast decode above 128k
