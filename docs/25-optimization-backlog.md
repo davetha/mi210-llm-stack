@@ -55,7 +55,32 @@ things came out of building it that the entry above got wrong:
   a naive match collides across sites and corrupts the indentation it inserts.
   Every pattern is anchored on a leading newline.
 
-Awaiting validation on the 235B arm, whose 810 s/shard is the baseline to beat.
+**The framing above is too broad, and I nearly mis-validated the fix.** Load
+rate by quant method, TP, and arm:
+
+| Arm | TP | Quant method | Load rate |
+|---|---|---|---|
+| 30B bf16 | 2 | none (bf16) | **697 s/shard** |
+| 235B GPTQ-Int4 | 2 | gptq | **810 s/shard** |
+| 80B AWQ | 1 | compressed-tensors | 1.10 s/it |
+| GLM-4.6 AWQ | **2** | compressed-tensors | **9.11 s/it** |
+
+**TP>1 is not sufficient to cause it.** GLM-4.6 runs TP=2 and loads two orders
+of magnitude faster. The slow arms are bf16 and GPTQ; `compressed-tensors` is
+fast at either TP, so it evidently does not reach the `_load_w13` path `py-spy`
+caught.
+
+I briefly read GLM's fast load as confirming the patch. It does not — that
+container was created from the image tag *before* the patched layers were
+committed (`e27dbf262daa` vs `85de3e47a14e`), and `grep -c
+loaded_weight.is_contiguous()` inside it returns 0. It was fast without the fix.
+
+So: the diagnosis is still grounded — `py-spy` put every sample in `_load_w13`
+on the 30B bf16 TP=2 run, and the strided-copy mechanism is real for paths that
+reach it. But **the patch is unvalidated**, and its scope is narrower than
+"TP>1": it should help bf16 and GPTQ specifically. The 235B GPTQ re-run, which
+will pick up the patched image, is the real test against its 810 s/shard
+baseline.
 
 ---
 
