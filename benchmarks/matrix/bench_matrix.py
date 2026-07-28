@@ -123,7 +123,21 @@ def stream_request(url, model, prompt, max_tokens, timeout, extra=None):
     text = []
     usage = None
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    try:
+        resp_cm = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        # Surface the server's own explanation. Without this the failure is a
+        # bare "HTTP Error 400: Bad Request" with no hint, and the actual cause
+        # is in the body -- e.g. llama.cpp rejecting a prompt longer than the
+        # server's --ctx-size, which is a harness misconfiguration rather than
+        # anything wrong with the model.
+        try:
+            body = exc.read().decode("utf-8", "replace")[:400]
+        except Exception:  # noqa: BLE001
+            body = "<no body>"
+        raise RuntimeError(f"HTTP {exc.code} from server: {body}") from exc
+
+    with resp_cm as resp:
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):
