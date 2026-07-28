@@ -51,6 +51,47 @@ The +58% is INT8 versus AWQ **with AITER held constant on both sides**, which
 is the comparison that matters. What is *not* measured is INT8 without AITER,
 so nothing here supports a claim about INT8's standalone contribution.
 
+### It is 8-bit *activations* that win, not 8-bit weights
+
+W8A8 is not a widely published format, so the obvious question is whether the
+popular 8-bit checkpoints — GPTQ-Int8, AWQ-8bit — get the same result. They do
+not, and the reason is structural rather than a tuning gap.
+
+| Format | Weights | Activations | Reaches `v_mfma_i32_16x16x16i8`? |
+|---|---|---|---|
+| **INT8 W8A8** | int8 | **int8** | **yes** |
+| GPTQ-Int8 | int8 | bf16 | no |
+| AWQ-8bit | int8 | bf16 | no |
+
+Confirmed by profile, not inferred from timings. `py-spy` on a GPTQ-Int8 arm
+puts every sample in:
+
+```
+moe_wna16_weight_loader (quantization/moe_wna16.py:445)
+```
+
+`moe_wna16` is the **weight-only** path: it dequantizes to bf16 and runs a bf16
+GEMM. The 8 bits buy memory traffic and nothing else. Only W8A8 quantizes
+activations as well, which is what lets the GEMM be int8 × int8 and reach the
+INT8 matrix units where CDNA2 is fastest.
+
+**So the rule on this hardware is "8-bit activations", not "8-bit".** When
+choosing a checkpoint, `w8a8` / `compressed-tensors` is the thing to look for;
+`w8a16` — however it is labelled — will not reach the hardware that makes INT8
+worth choosing here.
+
+### The popular formats also load far more slowly
+
+| Format | Load time (TP=1, same model) |
+|---|---:|
+| INT8 W8A8 (`compressed-tensors`) | **123 s** |
+| GPTQ-Int8 (`auto_gptq` → WNA16) | **>28 min** |
+
+The WNA16 loader does a `loaded_weight.to(device)` plus a format conversion
+**per expert per weight** — 128 experts × 48 layers, single-threaded. Weights
+reach VRAM early (32.15 GB resident) and the remaining time is pure CPU
+conversion. That is a deployment cost, not a benchmark artifact.
+
 ### INT8 wins because CDNA2's INT8 peak equals its bf16 peak
 
 gfx90a provides `v_mfma_i32_16x16x16i8` and peaks at **181 TOPS INT8 — the same
