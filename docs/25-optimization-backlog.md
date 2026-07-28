@@ -163,24 +163,33 @@ recommendation.
 
 ---
 
-## 5. llama.cpp MMQ / `v_dot4_i32_i8`
+## 5. llama.cpp MMQ / `v_dot4_i32_i8` — CLOSED, already in use
 
-**Evidence.** Untested. llama.cpp's MMQ path uses AMD dot-product intrinsics for
-quantized matmul; `GGML_CUDA_FORCE_MMQ` and `GGML_CUDA_FORCE_CUBLAS` select
-between MMQ and dequant+BLAS. Given INT8 arithmetic is free on this chip
-(181 TOPS = bf16 peak), the MMQ path should be favoured — but nothing here has
-confirmed which path the current build takes for Q4_K_M/Q8_0.
+**Answered by disassembly, not benchmark.** Extracting all 45 gfx90a offload
+bundles from the shipped `libggml-hip.so` and disassembling 632,972 instructions:
 
-**Proposed.** Disassemble the shipped `libggml-hip.so` for `v_dot4_i32_i8` /
-MFMA-int8 the same way `docs/22` did for attention, then A/B the flag.
+| Instruction | Count |
+|---|---:|
+| **`v_dot4c_i32_i8`** | **11,008** |
+| `v_mfma_f32_16x16x16f16` | 1,200 |
+| `v_mfma_i32_16x16x16i8` | 544 |
 
-**How this could be wrong.** llama.cpp already routes CDNA sensibly in the
-attention case — `docs/22` found the matrix cores were *already* in use and the
-"obvious" flag made things 18-26% **slower**. Assume the same until disassembly
-says otherwise.
+llama.cpp is **already** reaching INT8 dot-product hardware, heavily. The MMQ
+path is not dormant and `GGML_CUDA_FORCE_MMQ` has nothing to switch on — the
+kernels that would be forced are the ones already running.
 
-**Confidence: medium.** Cheap to check, and the check is disassembly, not a
-benchmark.
+This is the same shape as the rocWMMA result in `docs/22`: the "obvious"
+optimization was already in place, and the flag would have changed which
+already-good kernel ran rather than turning hardware on. Suspecting that first,
+and checking by disassembly rather than by A/B, cost minutes instead of a
+benchmark cycle.
+
+**One open sub-question, deliberately not pursued.** `v_dot4c_i32_i8`
+outnumbers `v_mfma_i32_16x16x16i8` 20:1, so ggml prefers the dot-product form
+over INT8 MFMA for quantized matmul. Whether MFMA would be faster for the large
+GEMM shapes in prefill is unanswered — but it is a change to ggml's kernel
+selection, not a flag, and llama.cpp already wins prefill at tier 1 and 2. Low
+priority absent evidence that these specific shapes are underperforming.
 
 ---
 
