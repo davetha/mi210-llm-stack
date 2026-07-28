@@ -85,12 +85,23 @@ worth choosing here.
 | Format | Load time (TP=1, same model) |
 |---|---:|
 | INT8 W8A8 (`compressed-tensors`) | **123 s** |
-| GPTQ-Int8 (`auto_gptq` → WNA16) | **>28 min** |
+| GPTQ-Int8 (`auto_gptq` → WNA16) | **>46 min, never reached serving** |
 
 The WNA16 loader does a `loaded_weight.to(device)` plus a format conversion
 **per expert per weight** — 128 experts × 48 layers, single-threaded. Weights
 reach VRAM early (32.15 GB resident) and the remaining time is pure CPU
-conversion. That is a deployment cost, not a benchmark artifact.
+conversion.
+
+The GPTQ arm was stopped at 46 minutes, still inside
+`moe_wna16_weight_loader`, never having served a request. **That absence is the
+result, not a gap in the data**: on this stack a GPTQ-Int8 MoE of this size does
+not reach serving in a practical time. No throughput row is reported for it
+because none was ever produced, and inventing one from a partial load would be
+worse than the empty cell.
+
+AWQ-8bit was dropped for the same reason rather than measured: it uses the same
+`moe_wna16` loader and the same w8a16 scheme, so it would have cost another
+45+ minutes to confirm a mechanism already established by profile.
 
 ### INT8 wins because CDNA2's INT8 peak equals its bf16 peak
 
