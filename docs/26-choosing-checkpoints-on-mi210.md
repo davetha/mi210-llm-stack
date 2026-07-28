@@ -286,6 +286,34 @@ Every one of those knobs earns its place:
 | `VLLM_PREFER_AITER_FA=1` | **actually selects it** — without this `ROCM_ATTN` is appended first and wins unconditionally |
 | `--max-model-len 131072` | **never higher.** Above 128k the graph capture bakes the Triton fallback into *every* request — 10× decode cost. `docs/23` |
 | `--group-add 44 --group-add 991` | numeric; `render`/`video` names do not resolve inside the container |
+| `--max-num-batched-tokens 8192` | **+11% prefill.** The default is **2048**, which chops a 241k prompt into ~119 sequential passes |
+
+### `--max-num-batched-tokens`: set it to 8192 and stop
+
+Measured on the 256k-patched build, AWQ, TP=1:
+
+| chunk | TTFT @241k | prefill @241k | prefill @15k |
+|---:|---:|---:|---:|
+| **2048** (default) | 338.4 s | 715 t/s | 3,017 t/s |
+| **8192** | **307.2 s** | **788 t/s** | 3,360 t/s |
+| 16384 | 305.9 s | 790 t/s | 3,360 t/s |
+| 32768 | 304.8 s | 793 t/s | 3,415 t/s |
+
+**+10.9% at long context, +11.4% at 15k, and it plateaus at 8192.** Going to
+32768 buys another 0.6% for 4× the activation memory — not worth it.
+
+Decode is unaffected (15.7–16.0 t/s across all four), which is expected: chunking
+is a prefill-scheduling parameter.
+
+**What this rules out is as useful as what it buys.** Long-context prefill is
+714→793 t/s against 3,017–3,415 t/s at 15k — a 4.2× gap that chunk size barely
+touches. That gap is **quadratic attention**, not launch overhead: at 16× the
+tokens, per-token attention cost is 16×, and if attention is ~20% of prefill at
+15k the predicted slowdown is `(0.8 + 16×0.2) = 4.0×`. Observed 4.2×.
+
+So after this one flag, **the remaining long-context TTFT is not recoverable by
+tuning.** Prefix caching is the only large lever left, and only for repeated
+prefixes.
 
 Drop `--tensor-parallel-size 2` for anything under ~45 GB. TP=1 is faster per
 card when the model fits; TP=2 is for capacity, and for KV headroom at long
@@ -420,10 +448,39 @@ Calibrating against the one configuration actually measured here:
 Use **~57 GB/s**, not 204, for planning. Expert reads are scattered and
 routing-dependent; they do not stream.
 
-Worked example — GLM-4.6 (357B total, ~32B active) at Q4, all experts CPU-side:
-32 × 0.5 = 16 GB/token ⇒ **~3.6 t/s**. Pin only a third of the layers and it is
-~11 t/s. That is the shape of the tradeoff: **`--n-cpu-moe` is close to linear in
-how many layers you pin**, so pin the fewest that make it fit.
+### MEASURED — and the linearity claim was wrong
+
+This document previously said "**`--n-cpu-moe` is close to linear in how many
+layers you pin**". A sweep on GLM-4.6 IQ3_XS says otherwise:
+
+| CPU expert layers | TTFT @15k | prefill |
+|---|---:|---:|
+| auto-fit (~0, 135.57 of 139 GB on GPU) | **77.5 s** | **196 t/s** |
+| 60 | 101.5 s | 149 t/s |
+| 70 | 105.0 s | 145 t/s |
+| 80 | 107.6 s | 141 t/s |
+| 92 (all) | 107.6 s | 142 t/s |
+
+**The cost is almost entirely in the first step off the GPU.** Going from
+auto-fit to 60 layers costs **24%** of prefill; going from 60 to *all 92* costs
+another **4.7%**. From 60 onward the curve is flat to within noise.
+
+So the model was wrong in a way that matters for planning, and in the useful
+direction: **once any meaningful fraction of experts is CPU-resident, pinning
+more costs almost nothing.** The decision is binary — fits on GPU, or does not —
+not a dial to be tuned. If you must spill, spill generously and take the VRAM
+headroom for KV; there is no measured penalty for pinning 92 over 60.
+
+Two caveats on scope. These are **prefill** numbers at 15k; the decode half of
+the sweep did not complete, and decode is where the bandwidth argument actually
+applies. And `-ngl 999 --n-cpu-moe N` disables auto-fit, so N below ~60 does not
+fit at all — `--n-cpu-moe 30` and `45` both died with
+`allocating 70673.58 MiB on device 1: cudaMalloc failed`.
+
+The **~3.6 t/s** worked example below therefore remains **unvalidated**, and the
+flat curve above is weak evidence against it: if decode were purely
+DDR4-bandwidth-bound in pinned-layer count, prefill would not be this flat
+either.
 
 **Prefill is the real problem, not decode.** On a full-attention MoE, prefill
 pushes every prompt token through all layers including the CPU-resident ones, and

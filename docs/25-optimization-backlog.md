@@ -378,6 +378,46 @@ W4A8-int8 checkpoint on gfx90a, which is the cheap first step.
 
 ---
 
+## 1c. Speculative decoding — MEASURED, and it hurt both ways
+
+Prompted by a look at ROCmFPX (RDNA-only, so its formats do not apply here), the
+one transferable idea was multi-token prediction: scheduling rather than kernels,
+therefore ISA-independent, and aimed at this box's weakest axis.
+
+**It made decode worse in every configuration tested.**
+
+| arm | prefill @15k | decode @101k | vs baseline |
+|---|---:|---:|---|
+| 80B W8A16, no speculation | 6,679 | **51.34** | — |
+| 80B W8A16 + native MTP, 1 token | 5,510 | 43.09 | **−16%** |
+| 80B W8A16 + native MTP, 2 tokens | 6,296 | 37.30 | **−27%** |
+| 30B W8A8 TP=2, no speculation | 7,278 | **43.40** | — |
+| 30B W8A8 TP=2 + n-gram | 7,224 | 32.76 | **−24%** |
+
+MTP also cost prefill — 6,679 → 5,510 at one speculative token.
+
+**Read the n-gram row narrowly.** The benchmark prompt is random filler plus a
+counting instruction, which is close to a worst case for prompt-lookup: there is
+nothing in the prompt to speculate from. That was stated in the script before the
+run, and the result is consistent with it. It says "not helped by this workload",
+not "does not work".
+
+**The MTP rows are the surprising ones and do not have that excuse.** Counting
+from 1 to 60 is about as predictable as generation gets, so acceptance should be
+high, and more speculative tokens should help rather than hurt. Getting *worse*
+at 2 tokens than at 1 points at per-step overhead dominating whatever acceptance
+buys — plausibly the same untuned-MoE-kernel problem that makes W8A8 lose decode
+twice over (`docs/24`), since each speculative step runs the MoE again.
+
+**Not closed, but demoted.** Worth one re-test after the MI210 `fused_moe` config
+is in place, because if speculation is being taxed by an untuned expert GEMM then
+tuning changes the sign. Until then, do not enable it here.
+
+**Confidence: high** that it hurts as currently configured, **low** that this
+generalises past this hardware and this prompt shape.
+
+---
+
 ## 2. The 128k graph-capture gate — unlock fast decode above 128k
 
 **Evidence.** `docs/23`. `gpu/model_states/default.py:152-156`:

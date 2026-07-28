@@ -196,6 +196,31 @@ card lighter quantization buys bandwidth, not arithmetic.
 tok/s. The 80B's headline 6,679 tok/s needed a second card, so quoting it beside
 a TP=1 row compares two cards against one, not two models.
 
+### Tier 2 completed: W8A8 wins prefill and loses decode
+
+Both 80B checkpoints, TP=2, same flags — the decode number took three attempts
+(see `docs/25`) and now exists:
+
+| 80B, TP=2 | prefill @15k | prefill @101k | **decode @101k** | weights | load |
+|---|---:|---:|---:|---:|---:|
+| **W8A8** (`RedHatAI`) | **7,249** | **4,943** | 45.19 t/s | **38.31 GiB** | **142.8 s** |
+| W8A16 (`cyankiwi`) | 6,679 | 4,668 | **51.34 t/s** | 40.95 GiB | 183.7 s |
+
+W8A8 takes prefill by **+8.5%**, uses less memory and loads faster — but **loses
+decode by 12%**.
+
+**That is the second independent occurrence of the same pattern.** At tier 1,
+W8A8 at TP=2 decoded 43.4 t/s against bf16's 62.6 on identical hardware. Twice
+now the more heavily quantized format has lost a bandwidth-bound decode it
+should win, since INT8 halves weight traffic.
+
+Two confirmations make the untuned-kernel explanation much more likely than
+coincidence: vLLM ships tuned `fused_moe` configs for MI300X/MI325X and **none
+for MI210**, so the Triton INT8 MoE path runs on generic heuristics at batch-1
+decode shapes. A tuned config for this card now exists
+(`E=128,N=768,device_name=AMD_Instinct_MI210.json`) and re-measuring against it
+is the open item.
+
 **The decode win is real and architectural.** At the same TP=1, the 80B decodes
 **45.9 tok/s against the 30B's 33.8** — 36% faster on a model nearly three times
 larger, with a KV cache of 10.4 GiB against 27.2. Qwen3-Next is a 3:1 Gated
