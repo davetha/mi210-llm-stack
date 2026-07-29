@@ -114,6 +114,30 @@ until curl -sf -m 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; do
 done
 echo "ready after ${elapsed}s"
 
+# Clamp the long-context prompt to what the server was actually configured for.
+#
+# llama.cpp arms pass --ctx-size N, but the longctx workload defaults to 262144
+# tokens. Mismatch produces
+#   HTTP 400: request (241846 tokens) exceeds the available context size (32768)
+# on every rep, and the arm is recorded as a failure that looks like a model or
+# placement problem. That silently killed the whole --n-cpu-moe decode sweep --
+# four arms, all four "failed", none of them for any reason worth knowing.
+#
+# 0.85 leaves room for the generated tokens and the harness's own framing.
+if [ -z "${LONGCTX_TOKENS:-}" ]; then
+    ctx_arg=""
+    prev=""
+    for a in "$@"; do
+        case "$prev" in --ctx-size|-c) ctx_arg="$a" ;; esac
+        prev="$a"
+    done
+    if [ -n "$ctx_arg" ] && [ "$ctx_arg" -gt 0 ] 2>/dev/null; then
+        LONGCTX_TOKENS=$(( ctx_arg * 85 / 100 ))
+        export LONGCTX_TOKENS
+        echo "  longctx clamped to $LONGCTX_TOKENS (server --ctx-size $ctx_arg)"
+    fi
+fi
+
 rc=0
 for wl in cold16k longctx; do
     echo "--- workload $wl ---"
