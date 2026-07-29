@@ -92,10 +92,31 @@ Use dense models when you need their quality or ecosystem, not for throughput.
 |---|---|---:|---:|---:|
 | GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **208** | pending |
 | GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 196 | 8.5 @25.8k |
-| AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` | — | — | ✗ **unusable** |
+| AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` (**UVA**) | — | — | ✗ **unusable** |
+| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | measuring | measuring |
 
-**vLLM's CPU offload is not viable at this tier** — one 28k request ran past 35
-minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
+**vLLM's *UVA* offload is not viable at this tier** — one 28k request ran past
+35 minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
+
+That result was previously written up here as "vLLM's CPU offload is not
+viable", which claims more than was measured. vLLM 0.23 has **two** offload
+backends and only one was tested:
+
+| Flag | Backend | Mechanism |
+|---|---|---|
+| `--cpu-offload-gb` | `UVAOffloader` | Weight **stays** in pinned host memory; the GEMM reads it across PCIe as it runs. No staging, no overlap. |
+| `--offload-group-size` | `PrefetchOffloader` | Weight is **copied** to a static GPU buffer pool on a separate stream, double-buffered, layer N+1 landing while layer N computes. |
+
+The one that was measured is the one that cannot overlap. `--offload-params
+experts` further restricts either backend to the expert stacks, which on GLM-4.6
+is ~168 GB of the 176 GB. Round 16 measures the prefetch backend at 50/67/75%
+offload with a UVA control on the same harness.
+
+**vLLM has no managed-memory path at all** — zero references to
+`hipMallocManaged`/`cudaMallocManaged` in the package. So the llama.cpp
+unified-memory arms (round 15) and this are *not* the same mechanism: that one
+is OS demand paging, page-granular and unscheduled; this one is explicit,
+tensor-granular and prefetched.
 
 **Do not quantize harder just to clear the VRAM line.** UD-IQ2_M is 16 GB
 smaller than IQ3_XS and buys **+6.1% prefill**, because both saturate VRAM
