@@ -28,11 +28,14 @@ BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
 cd "$BASE"
 
-echo "=== $(date -u +%T) waiting for earlier work ==="
-while ps -eo cmd | grep -qE "[b]in/round[0-9]_|[f]etch_model.py" \
-   || docker ps --format '{{.Names}}' | grep -q '^bench-'; do
-    sleep 120
-done
+# PID-file wait, not pattern matching. The previous version waited on
+# "[b]in/round[0-9]_" -- which matches bin/round6_spec_dense.sh, i.e. ITSELF --
+# and hung indefinitely. Fourth instance of that bug in one session; see
+# wait_for_bench.sh for the full list and why regexes are the wrong tool here.
+. "$BIN/wait_for_bench.sh"
+bench_claim
+echo "=== $(date -u +%T) waiting for other bench work ==="
+bench_wait_for_others
 echo "=== $(date -u +%T) starting ==="
 
 # ---------------------------------------------------------------------------
