@@ -376,9 +376,19 @@ Two conclusions, and the second is the one that matters. First, llama.cpp is
 usable at this tier where vLLM was not — 8.5 t/s against a projected two hours
 per request. Second, **this is barely an offload result at all**: auto-fit put
 all but ~3 GiB on the cards, so a 357B model very nearly fits in 128 GB of VRAM
-at IQ3_XS. What remains slow is **prefill, at 181 t/s** — 25× behind the 80B —
-which is the signature of a small CPU-resident fraction serializing the forward
-pass, not of decode bandwidth. Selection guidance in `docs/26`.
+at IQ3_XS. What remains slow is **prefill, at 181 t/s** — 25× behind the 80B.
+
+**I first attributed that prefill to the ~3 GiB spill, and that was wrong.**
+A UD-IQ2_M build 16 GB smaller, fitting comfortably, prefills at **208 t/s
+against IQ3_XS's 196** — +6.1%, not the order of magnitude the serialization
+story predicted. Both saturate VRAM at ~135 GB because auto-fit spends anything
+freed on KV.
+
+The cause is the model: **~32B active parameters over 92 GQA layers**, against
+Qwen3-Next's 3B active with 12 of 48 layers holding KV. Roughly 10.7× the active
+parameters plus far more attention brackets the gap without invoking offload.
+So at tier 4, **quantizing harder to clear the VRAM line does not buy prefill** —
+pick the quant for accuracy and KV headroom. Selection guidance in `docs/26`.
 
 - **Tiers 2–4 are still running.** 80B (Qwen3-Next, hybrid GDN), 235B
   (GPTQ-Int4 at reduced context), GLM-4.6 (IQ3_XS with CPU offload).

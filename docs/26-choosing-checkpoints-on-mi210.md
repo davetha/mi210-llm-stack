@@ -579,10 +579,33 @@ RAM) was never run.
 
 Two things it does show:
 
-- **Prefill is the tier-4 problem, exactly as predicted.** 181–196 tok/s against
-  the 80B's 4,668. That is 25× slower on a model 4.5× larger, and it is the
-  `mimo` signature: a small CPU-resident fraction serializes the whole forward
-  pass. **Decode is fine; prefill is what makes this tier painful.**
+- **Prefill is the tier-4 problem.** 181–196 tok/s against the 80B's 4,668 —
+  25× slower on a model 4.5× larger. **Decode is fine; prefill is what makes
+  this tier painful.**
+
+  > **REFUTED: it is not the CPU-resident fraction.** I attributed this to the
+  > ~3 GiB that auto-fit left on the CPU serializing the forward pass — the
+  > `mimo` signature — and predicted that a build fitting entirely in VRAM would
+  > see prefill jump into the thousands. It does not.
+  >
+  > | build | weights | VRAM used | prefill @15k |
+  > |---|---:|---:|---:|
+  > | IQ3_XS | 139 GB | 135.57 GB | 196 t/s |
+  > | **UD-IQ2_M** | **122.6 GB** | 135.02 GB | **208 t/s** |
+  >
+  > **+6.1%.** Sixteen gigabytes less weight, and prefill barely moves. Both
+  > saturate VRAM because auto-fit spends whatever is freed on KV, so the
+  > comparison is clean.
+  >
+  > The real cause is the model, not the placement: GLM-4.6 runs **~32B active
+  > parameters across 92 GQA layers**, against Qwen3-Next's 3B active with only
+  > 12 of 48 layers holding KV. That is ~10.7× the active parameters *and* far
+  > more attention, which brackets the observed gap without invoking offload at
+  > all.
+  >
+  > Consequence for selection: **at this tier, quantizing harder to get under
+  > the VRAM line does not buy prefill.** Choose the quant for accuracy and KV
+  > headroom instead.
 - **Decode falls 33% from short context to 25.8k** (12.83 → 8.51), steeper than
   the 80B's curve, consistent with 92 layers of GQA KV.
 
