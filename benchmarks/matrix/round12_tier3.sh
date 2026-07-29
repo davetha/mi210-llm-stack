@@ -30,17 +30,32 @@ DEST=$BASE/t235-gguf-q3kxl
 cd "$BASE"
 
 . "$BIN/wait_for_bench.sh"
-bench_claim
-echo "=== $(date -u +%T) waiting for other bench work ==="
-bench_wait_for_others
-echo "=== $(date -u +%T) starting ==="
 
-if [ ! -d "$DEST" ] || [ -z "$(ls -A "$DEST" 2>/dev/null)" ]; then
-    echo "--- fetching UD-Q3_K_XL (104.2 GB) ---"
+# FETCH BEFORE CLAIMING. The first version of this claimed the bench lock and
+# THEN downloaded 104 GB inside the critical section. When the CDN stalled --
+# two sockets stuck in SYN-SENT, zero bytes for minutes -- this script sat at
+# the head of the FIFO holding the GPUs idle while four ready rounds queued
+# behind a download that was making no progress.
+#
+# Nothing about a download needs the GPUs. Only the arm does. So the fetch runs
+# unlocked, concurrently with whatever else is benchmarking, and the claim is
+# taken afterwards.
+#
+# aria2 runs with --continue=true, so an interrupted fetch resumes rather than
+# restarting; the .aria2 control-file guard below is what catches a fetch that
+# resumed but did not finish.
+if [ ! -d "$DEST" ] || [ -z "$(ls -A "$DEST" 2>/dev/null)" ] \
+   || ls "$DEST"/**/*.aria2 >/dev/null 2>&1 || ls "$DEST"/*.aria2 >/dev/null 2>&1; then
+    echo "=== $(date -u +%T) fetching UD-Q3_K_XL (104.2 GB), lock NOT held ==="
     python3 "$BIN/fetch_model.py" unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF "$DEST" \
         --include UD-Q3_K_XL --connections 1 --concurrent 4 \
         || { echo "!! fetch failed"; exit 1; }
 fi
+
+bench_claim
+echo "=== $(date -u +%T) waiting for other bench work ==="
+bench_wait_for_others
+echo "=== $(date -u +%T) starting ==="
 # A truncated GGUF reports the right size and then dies with "data is not within
 # the file bounds" -- that cost three attempts at tier 4. Refuse to start if a
 # control file is still present.
