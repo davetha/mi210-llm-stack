@@ -450,13 +450,51 @@ MI210 config produced so far covers **batch size 1 only**, and those same small-
 batch shapes are the leading suspect for W8A8 losing decode twice over
 (`docs/24`) — which matters far more than speculation does.
 
-**The decisive follow-up is a dense model.** Llama-3.3-70B W8A8 verifies 2 tokens
-against the *same* weights read once, so the 1.98× penalty does not exist and
-speculation should help. `round6_spec_dense.sh` D1 runs it. If speculation loses
-there too, this whole explanation is wrong and the cost is elsewhere.
+### REFUTED: it is not sparsity. Decode is not bandwidth-bound at all.
 
-**Confidence: high** on the mechanism (acceptance measured, arithmetic matches),
-**high** that it hurts on sparse MoE, **untested** on dense.
+The dense test finally ran with a real draft model (`Llama-3.2-3B` against
+`Llama-3.3-70B`, both W8A8) and **perfect acceptance**:
+
+| dense 70B, ctx 64k | acceptance | prefill @15k | decode @60k |
+|---|---:|---:|---:|
+| baseline, no speculation | — | 842 | **6.85** |
+| + draft, n=1 | **2.00 (100%)** | 779 | **6.01** |
+| + draft, n=3 | **4.00 (100%)** | 770 | — |
+
+**Every drafted token was accepted, and decode still got 12% worse.** On a dense
+model, where the expert-traffic penalty cannot exist. So the sparsity
+explanation is not sufficient, and the arithmetic that "accounted for" the MoE
+result was a coincidence of magnitudes.
+
+**The real cause is that decode on this hardware is nowhere near
+bandwidth-bound:**
+
+| | |
+|---|---:|
+| 70B W8A8 weights per rank | 36.4 GB |
+| MI210 HBM2e bandwidth | 1.6 TB/s |
+| time to stream weights once | 22.7 ms → **44 t/s** if bandwidth-bound |
+| **observed decode** | **6.85 t/s → 146 ms/token** |
+| **ratio** | **6.4× slower than the bandwidth bound** |
+
+Speculative decoding's entire premise is that verifying N+1 tokens is nearly
+free *because you are memory-bound reading all the weights anyway*. At 6.4× off
+that bound, decode is dominated by something else — launch overhead,
+dequantization compute, or plain kernel inefficiency — and that something scales
+with tokens processed. So verifying N+1 tokens costs roughly N+1×, and
+speculation loses **on every architecture**, which is exactly what was measured.
+
+**The much bigger finding is the 6.4× itself.** Decode has been treated as the
+weak axis of this box without asking what bound it was against. It is not
+against the hardware's. Closing even part of that gap is worth far more than
+speculation ever was, and it likely explains the W8A16-experts result in
+`docs/24` as well: dequantize-then-bf16-GEMM is exactly the kind of per-token
+compute that would put decode 6× off a bandwidth bound.
+
+**Confidence: high** that speculation loses here and why, **high** on the 6.4×
+figure, **untested** on what specifically consumes the other 123 ms/token.
+Profiling a decode step with `py-spy --native` or `rocprof` is the obvious next
+move and has not been done.
 
 ---
 
@@ -609,6 +647,35 @@ easily be slower than the CK path already running.
 
 **Verdict: closed.** The 242/1,422 ceiling is not conservative — it is the real
 boundary for instruction-level translation, and this category is the reason.
+
+---
+
+## 3b. MoE tuning via `benchmark_moe.py` — BLOCKED by an upstream bug
+
+Four attempts, ~6 GPU-hours, no usable config. The first two produced the wrong
+filename for reasons that were mine (`--tp-size 1` giving N=768 where the TP=2
+serving arm wants N=384; `--dtype auto` omitting the `int8_w8a16` tag). With
+both corrected, the tuner fails outright:
+
+```
+RuntimeError: const_data_ptr,
+  torch/include/torch/csrc/stable/tensor_inl.h:69, expected scalar type
+```
+
+A dtype mismatch inside the tuner's own `int8_w8a16` tensor construction, on
+torch 2.11's stable ABI. Not a configuration error and not fixable from the
+invocation.
+
+**Deprioritised rather than pursued**, because the thing it was meant to explain
+has since been explained. W8A8's decode deficit is not an untuned kernel — the
+MoE experts run `int8_w8a16` and never do INT8 arithmetic at all (`docs/24`),
+and decode overall sits 6.4× off its bandwidth bound (item 1c). Tuning the
+expert GEMM would still be worth having, but no conclusion now rests on it.
+
+**If retried:** patch the tuner's int8_w8a16 path, or tune through vLLM's own
+`fused_moe` benchmark rather than the standalone script. Full tuner output is
+kept at `logs/tuner_raw.log`, and `tune_moe_w8a8_v4.sh` carries the history of
+all four attempts in its header so a fifth is not started blind.
 
 ---
 
