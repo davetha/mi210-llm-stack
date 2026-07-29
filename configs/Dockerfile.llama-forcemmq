@@ -1,0 +1,68 @@
+# llama.cpp built with GGML_CUDA_FORCE_MMQ=ON, for A/B against llama-rocm714:latest.
+#
+# WHAT THIS CHANGES. ggml_cuda_should_use_mmq() (ggml/src/ggml-cuda/mmq.cu)
+# decides, per matmul, between the MMQ kernels -- which on gfx90a issue
+# v_mfma_i32_16x16x16i8, the correct CDNA2 int8 matrix instruction -- and
+# dequantizing the weights to fp16 for a hipBLAS GEMM. Its CDNA branch reads:
+#
+#     if (CDNA3)                        return true;
+#     if (n_experts > 64 || ne11 <= 128) return true;
+#     if (Q4_0|Q4_1|Q5_0|Q5_1)          return true;
+#     if (ne11 <= 256 && (Q4_K|Q5_K))   return true;
+#     return false;                     // dequantize -> fp16 hipBLAS
+#
+# Every MoE model in this matrix clears `n_experts > 64` (GLM-4.6 has 160,
+# Qwen3-30B/235B 128, Qwen3-Next-80B 512), so the EXPERT matmuls already take
+# the MFMA path and this flag cannot change them. What it changes is everything
+# else: attention projections and the dense layers, where at -ub 2048 the batch
+# dimension is ne11 = 2048, far past the 256 cutoff, so they currently run
+# dequantize-to-fp16 + hipBLAS on every prefill.
+#
+# GGML_CUDA_FORCE_MMQ short-circuits that heuristic to `return true`. It is a
+# compile-time #ifdef, not an environment variable, which is the only reason
+# this needs a separate image at all.
+#
+# WHY IT IS WORTH A REBUILD. The 256 cutoff is an upstream guess about where
+# rocBLAS overtakes MMQ, and it was not measured on this box. Upstream ROCm
+# heuristics have been wrong here twice already: rocWMMA flash attention, which
+# is 18-26% SLOWER on gfx90a (docs/22), and the paged-attention 128k ceiling,
+# which cost 10x decode until configs/extend_rocm_pa_256k_gfx9.py.
+#
+# BASED ON THE BASELINE IMAGE, NOT ON ITS BASE. The obvious Dockerfile would
+# repeat the original recipe -- FROM rocm714-dev:latest, clone llama.cpp, build
+# -- but rocm714-dev:latest no longer exists on this host, and the original used
+# `git clone --depth 1`, i.e. whatever master happened to be that day. Rebuilding
+# from a fresh clone would vary the source tree AND the flag at once, making any
+# measured difference unattributable.
+#
+# Building FROM llama-rocm714:latest instead reuses the exact tree the baseline
+# was compiled from -- /src is still present, at commit
+# 67b9b0e7f6ce45d929a4411907d3c48ec719e81c -- so the source is identical by
+# construction rather than by pinning, and no network fetch can fail or drift.
+FROM llama-rocm714:latest
+ENV ROCM_PATH=/opt/rocm PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}
+
+# A SEPARATE BUILD DIRECTORY, NOT A RECONFIGURE. Toggling the option in the
+# existing build/ would work in principle, but only the translation units cmake
+# decides are stale get recompiled, and a missed dependency edge would silently
+# leave baseline objects linked into the "forced" binary -- an A/B that reports
+# no difference because the two binaries really are the same. A fresh directory
+# costs a full compile and cannot half-apply.
+RUN cd /src && \
+    echo "building from $(git rev-parse HEAD)" && \
+    HIPCXX=/opt/rocm/llvm/bin/clang++ \
+    cmake -S . -B build-forcemmq -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx90a \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_CUDA_FORCE_MMQ=ON \
+      -DLLAMA_CURL=OFF -DCMAKE_PREFIX_PATH="/opt/rocm;/usr" \
+      -DCMAKE_HIP_COMPILER_ROCM_ROOT=/opt/rocm && \
+    cmake --build build-forcemmq --config Release -j"$(nproc)" -t llama-server && \
+    /src/build-forcemmq/bin/llama-server --version
+
+# Fail the BUILD, not the benchmark, if the flag did not actually take. A
+# silently-ignored cmake option would produce a binary equivalent to the
+# baseline and an A/B that reports "no difference" for the wrong reason.
+RUN grep -q "GGML_CUDA_FORCE_MMQ:BOOL=ON" /src/build-forcemmq/CMakeCache.txt \
+    && echo "verified: GGML_CUDA_FORCE_MMQ=ON in CMakeCache"
+
+ENTRYPOINT ["/src/build-forcemmq/bin/llama-server"]
