@@ -90,8 +90,8 @@ Use dense models when you need their quality or ecosystem, not for throughput.
 
 | Weights | Engine | On GPU | Prefill | Decode |
 |---|---|---:|---:|---:|
-| GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **208** | pending |
-| GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 196 | 8.5 @25.8k |
+| GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **217.8** | **10.85** @25.8k |
+| GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 195.9 | 8.51 @25.8k |
 | AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` (**UVA**) | — | — | ✗ **unusable** |
 | AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | measuring | measuring |
 
@@ -118,9 +118,32 @@ unified-memory arms (round 15) and this are *not* the same mechanism: that one
 is OS demand paging, page-granular and unscheduled; this one is explicit,
 tensor-granular and prefetched.
 
-**Do not quantize harder just to clear the VRAM line.** UD-IQ2_M is 16 GB
-smaller than IQ3_XS and buys **+6.1% prefill**, because both saturate VRAM
-anyway — auto-fit spends whatever is freed on KV. Choose for accuracy instead.
+**UD-IQ2_M wins both axes** — +11.2% prefill and **+27.5% decode** on a matched
+15k/25.8k pair. An earlier partial run put the prefill gain at +6.1% (208 t/s);
+the completed arm measures 217.8, and the decode gap is the larger effect.
+
+### Do not hand-place experts — `--n-cpu-moe` loses to auto-fit at every value
+
+Matched arms, same model (IQ3_XS), same prompts, only the placement changing:
+
+| Placement | Prefill @15k | Prefill @25.8k | Decode @25.8k |
+|---|---:|---:|---:|
+| **auto-fit** (135.57 GB on GPU) | **195.9** | **180.9** | **8.51** |
+| `--n-cpu-moe 60` | 159.7 | 151.9 | 7.47 |
+| `--n-cpu-moe 70` | 153.7 | 145.8 | 7.06 |
+| `--n-cpu-moe 80` | 140.9 | 140.4 | 6.77 |
+| `--n-cpu-moe 92` (all experts) | 141.0 | 134.1 | 6.36 |
+
+Monotone: every expert layer moved to the CPU costs throughput, and there is no
+knee to tune toward. Auto-fit beats the best manual value by **23% prefill** and
+**14% decode**.
+
+An earlier note here claimed the curve went "flat past 60". It does not — that
+came from comparing an auto-fit *cold16k* number against `--n-cpu-moe`
+*longctx* numbers. Matched workloads show a steady decline on both.
+
+**Reach for `--n-cpu-moe` only when the model does not otherwise fit.** It is a
+capacity mechanism, not a performance one.
 
 *(Tier 3, 235B, is running now — `unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF`
 UD-Q3_K_XL at 104.2 GB. It had no number because every vLLM-servable checkpoint
