@@ -118,6 +118,41 @@ unified-memory arms (round 15) and this are *not* the same mechanism: that one
 is OS demand paging, page-granular and unscheduled; this one is explicit,
 tensor-granular and prefetched.
 
+### Do NOT use `HSA_XNACK=1` unified memory on this host
+
+Tried, and it does not merely lose — it damages the host. `HSA_XNACK=1` plus
+`GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` with `-ngl 999` on GLM-4.6 IQ3_XS never
+finished loading:
+
+```
+llama-server: hsa-runtime/core/runtime/runtime.cpp:2026:
+  Runtime::VMFaultHandler: Assertion `false && "GPU memory access fault."'
+```
+
+The demand-paging path faulted during a migration and the HSA runtime aborted
+instead of servicing it. The abort left an rwsem with no live owner, and
+amdgpu's SVM eviction workers stacked up behind it:
+
+```
+INFO: task kworker/44:10 blocked for more than 122 seconds.
+Workqueue: events svm_range_evict_svm_bo_worker [amdgpu]
+... blocked on an rw-semaphore, but the owner is not found.
+```
+
+Load average hit **70 and was still climbing**. Killing the arm drained it
+(70 → 34 → 20) and both GPUs recovered without a reset — `rocminfo` enumerated
+normally at 42–47 °C idle — but nothing stopped on its own: the harness
+recorded the failure and advanced to the next `-ub` value, re-triggering it.
+
+The prefill-amortisation argument for RAM-resident weights with GPU compute is
+untouched by this — **the fault happens at load, before any of it is
+exercised**. The idea is not refuted; this route to it is. `--offload-backend
+prefetch` on vLLM pursues the same goal with explicit staged copies and no
+XNACK. Kernel 7.0.0-28-generic, ROCm 7.14.
+
+`benchmarks/matrix/round15_unified_mem.sh` now refuses to run without
+`ALLOW_UVM_HANG=1`.
+
 **UD-IQ2_M wins both axes** — +11.2% prefill and **+27.5% decode** on a matched
 15k/25.8k pair. An earlier partial run put the prefill gain at +6.1% (208 t/s);
 the completed arm measures 217.8, and the decode gap is the larger effect.
