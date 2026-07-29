@@ -22,7 +22,7 @@
 #
 #   . "$BIN/wait_for_bench.sh"
 #   bench_claim              # register this script as running work
-#   bench_wait_for_others    # block until every OTHER claim is gone
+#   bench_wait_for_others    # block until MY claim is the oldest (FIFO)
 #
 # Claims are removed on exit via trap, and stale claims (dead PIDs) are
 # reaped by the waiter, so a killed script cannot deadlock the next one.
@@ -35,23 +35,38 @@ bench_claim() {
 }
 
 bench_wait_for_others() {
-    local me=$$ parent=$PPID
+    # FIFO: wait until MY claim is the oldest live one.
+    #
+    # The first version of this waited for EVERY other claim to clear, which is
+    # a mutual-exclusion cycle by construction: round7 claimed, round8 claimed,
+    # each then waited for the other forever. That was the fifth deadlock of the
+    # session and the first one inside the helper written to prevent them.
+    #
+    # Waiting for "no claim older than mine" instead gives a total order, so a
+    # cycle cannot form: exactly one claim is oldest, and it always proceeds.
+    # Ties on mtime are broken by PID, which is likewise total.
+    local me=$$ mine
     mkdir -p "$BENCH_RUN_DIR"
+    mine="$BENCH_RUN_DIR/$me.pid"
+    [ -e "$mine" ] || bench_claim
     while true; do
-        local blocking=0 f pid
+        local blocking=0 f pid their_ts my_ts
+        my_ts=$(stat -c %Y "$mine" 2>/dev/null || echo 0)
         for f in "$BENCH_RUN_DIR"/*.pid; do
             [ -e "$f" ] || continue
             pid=$(cat "$f" 2>/dev/null)
             [ -n "$pid" ] || { rm -f "$f"; continue; }
-            # Reap claims whose process is gone -- a killed script must not
-            # deadlock everything queued behind it.
+            # Reap dead claims so a killed script cannot block the queue.
             if ! kill -0 "$pid" 2>/dev/null; then rm -f "$f"; continue; fi
             [ "$pid" = "$me" ] && continue
-            [ "$pid" = "$parent" ] && continue
-            blocking=1
+            their_ts=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+            if [ "$their_ts" -lt "$my_ts" ] \
+               || { [ "$their_ts" = "$my_ts" ] && [ "$pid" -lt "$me" ]; }; then
+                blocking=1
+            fi
         done
-        # Containers are unambiguous -- a name either starts with bench- or it
-        # does not, and no shell command line can impersonate one.
+        # Containers are unambiguous -- no shell command line can impersonate a
+        # container name -- so these are always worth waiting for.
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^bench-'; then
             blocking=1
         fi
