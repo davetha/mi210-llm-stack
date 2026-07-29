@@ -17,6 +17,29 @@
 # are searching for -- as does any shell that spawned you, any editor with the
 # file open, and any `grep` you run to debug it.
 #
+# The same trap caught a sixth time, in the cleanup rather than the wait:
+#   6. `ssh host 'pkill -f "aria2c --input-file /path/to/model"'` killed the
+#      ssh session running it, because the remote shell's own command line
+#      contained the pattern. The kills landed first, so the work was done,
+#      but the connection died and the result looked like a failure.
+#
+# TWO NON-DEADLOCK HAZARDS WORTH THE SAME PARANOIA:
+#
+#   scp OVER A RUNNING SCRIPT CORRUPTS IT. bash reads a script incrementally
+#   from an open fd (255) by byte offset, and scp truncates and rewrites in
+#   place -- same inode. Overwriting round14_iq_vs_k.sh while it sat inside a
+#   40-minute download meant that when the download returned, bash would have
+#   resumed reading at a stale offset into different text and executed whatever
+#   landed there. Verify with `stat -L /proc/<pid>/fd/255` against `stat` on the
+#   path: same inode means the running script was modified underneath itself.
+#   Kill and relaunch, or deploy to a new filename.
+#
+#   FETCHING INSIDE THE LOCK IDLES THE GPUs. Rounds 12 and 14 both claimed the
+#   bench lock and then downloaded 100+ GB, holding the queue head while
+#   nothing computed -- 35 and 40 minutes respectively. Downloads need no GPU;
+#   claim afterwards. Fixing only the round that failed visibly left the copy
+#   in the other script, which is why it happened twice.
+#
 # So: no pattern matching. Track work by PID file, and check liveness with
 # kill -0, skipping our own PID and our parent's.
 #
