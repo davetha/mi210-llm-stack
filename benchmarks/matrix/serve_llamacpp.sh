@@ -49,10 +49,20 @@ fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
+# Per-arm environment passthrough, unquoted on purpose so multiple "-e K=V"
+# pairs split into separate docker arguments.
+#
+# Exists for the unified-memory arms, which need HSA_XNACK=1 and
+# GGML_CUDA_ENABLE_UNIFIED_MEMORY=1. Deliberately NOT set globally: xnack+ is a
+# different code-object target from xnack-, and the 242 translated AITER ASM
+# kernels were built for the default, so turning XNACK on for every container
+# could quietly make them unloadable on the vLLM arms.
+# shellcheck disable=SC2086
 docker run -d --name "$NAME" \
   --device /dev/kfd --device /dev/dri \
   --group-add 44 --group-add 991 \
   `# numeric gids: --group-add resolves names in the CONTAINER's /etc/group` \
+  ${LLAMA_EXTRA_ENV:-} \
   --security-opt seccomp=unconfined \
   --ipc=host --shm-size 32G \
   -v "$HOST_MODELS":/models \
