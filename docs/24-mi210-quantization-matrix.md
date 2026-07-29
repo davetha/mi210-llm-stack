@@ -107,6 +107,58 @@ The +58% is INT8 versus AWQ **with AITER held constant on both sides**, which
 is the comparison that matters. What is *not* measured is INT8 without AITER,
 so nothing here supports a claim about INT8's standalone contribution.
 
+### CORRECTION: on a MoE, "W8A8" is W8A8 dense + **W8A16 experts**
+
+The claim below — that W8A8 reaches `v_mfma_i32_16x16x16i8` — is **true for the
+dense linear layers and false for the MoE experts**, which is where nearly all
+of a sparse MoE's compute and weight traffic actually live.
+
+Caught by a deliberate check that the tuned MoE config had loaded. It had not,
+and the filename vLLM asked for gave the game away:
+
+```
+WARNING [fused_moe.py:1071] Using default MoE config...
+Config file not found at .../E=128,N=384,device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json
+```
+
+`dtype=int8_w8a16` — for a W8A8 checkpoint. In
+`fused_moe/config.py::get_config_dtype_str`:
+
+```python
+if use_fp8_w8a8:      return "fp8_w8a8"
+elif use_fp8_w8a16:   return "fp8_w8a16"
+elif use_int8_w8a16:  return "int8_w8a16"
+elif use_int4_w4a16:  return "int4_w4a16"
+```
+
+**There is no `use_int8_w8a8` branch.** The string is emitted only when
+`use_int8_w8a16` is set, so the expert GEMMs are running int8 weights against
+**16-bit activations** — dequantize to bf16, exactly like AWQ or GPTQ. The same
+server log confirms the dense path is genuinely W8A8:
+
+```
+Selected TritonInt8ScaledMMLinearKernel for CompressedTensorsW8A8Int8   <- dense: true W8A8
+Using TRITON Int8 MoE backend                                          <- experts: int8_w8a16
+```
+
+**This resolves the decode anomaly that appeared twice.** W8A8 loses decode to
+bf16 (43.43 vs 62.59) and to W8A16 at tier 2 (45.19 vs 51.34) because its
+experts never do INT8 arithmetic — they do bf16 arithmetic *plus* a
+dequantization step, which is strictly worse than plain bf16 when decode is
+compute-bound.
+
+It also explains why prefill still wins: prefill is bandwidth-bound on weights,
+where int8 halves traffic regardless of what the GEMM does with it.
+
+So the honest statement for a **sparse MoE** is:
+
+> W8A8 buys **weight bandwidth** (prefill) and not **arithmetic** (decode),
+> because the expert GEMMs run w8a16 no matter what the checkpoint says.
+
+The `+58%` prefill figure below stands. The implied claim that it comes from
+reaching INT8 matrix units does not — for the experts it comes from halved
+memory traffic. On a **dense** model the original claim holds unmodified.
+
 ### It is 8-bit *activations* that win, not 8-bit weights
 
 W8A8 is not a widely published format, so the obvious question is whether the
