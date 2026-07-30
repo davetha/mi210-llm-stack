@@ -90,16 +90,109 @@ Use dense models when you need their quality or ecosystem, not for throughput.
 
 | Weights | Engine | On GPU | Prefill | Decode |
 |---|---|---:|---:|---:|
-| GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **208** | pending |
-| GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 196 | 8.5 @25.8k |
-| AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` | — | — | ✗ **unusable** |
+| GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **217.8** | **10.85** @25.8k |
+| GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 195.9 | 8.51 @25.8k |
+| AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` (**UVA**) | — | — | ✗ **unusable** |
+| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | ✗ **NCCL crash** | — |
 
-**vLLM's CPU offload is not viable at this tier** — one 28k request ran past 35
-minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
+**vLLM's *UVA* offload is not viable at this tier** — one 28k request ran past
+35 minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
 
-**Do not quantize harder just to clear the VRAM line.** UD-IQ2_M is 16 GB
-smaller than IQ3_XS and buys **+6.1% prefill**, because both saturate VRAM
-anyway — auto-fit spends whatever is freed on KV. Choose for accuracy instead.
+That result was previously written up here as "vLLM's CPU offload is not
+viable", which claims more than was measured. vLLM 0.23 has **two** offload
+backends and only one was tested:
+
+| Flag | Backend | Mechanism |
+|---|---|---|
+| `--cpu-offload-gb` | `UVAOffloader` | Weight **stays** in pinned host memory; the GEMM reads it across PCIe as it runs. No staging, no overlap. |
+| `--offload-group-size` | `PrefetchOffloader` | Weight is **copied** to a static GPU buffer pool on a separate stream, double-buffered, layer N+1 landing while layer N computes. |
+
+The one that was measured is the one that cannot overlap. `--offload-params
+experts` further restricts either backend to the expert stacks, which on GLM-4.6
+is ~168 GB of the 176 GB.
+
+**The prefetch backend does not currently work here either.** At 75% offload it
+crashed during load with `NCCL error: unhandled cuda error` in `ncclAllReduce`
+(worker TP1), then hung with the container still alive. A control run of
+`t35-w8a8` at TP=2 loaded normally on the same GPUs minutes later — 130 s,
+41.88 GiB KV cache — so this is the offloader, not the hardware. Untested
+mitigations: `--enforce-eager` (it joins a private copy stream into CUDA-graph
+captures, the most likely thing to break RCCL) and
+`VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1`. See `docs/29`.
+
+**vLLM has no managed-memory path at all** — zero references to
+`hipMallocManaged`/`cudaMallocManaged` in the package. So the llama.cpp
+unified-memory arms (round 15) and this are *not* the same mechanism: that one
+is OS demand paging, page-granular and unscheduled; this one is explicit,
+tensor-granular and prefetched.
+
+### Do NOT use `HSA_XNACK=1` unified memory on this host
+
+Tried, and it does not merely lose — it damages the host. `HSA_XNACK=1` plus
+`GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` with `-ngl 999` on GLM-4.6 IQ3_XS never
+finished loading:
+
+```
+llama-server: hsa-runtime/core/runtime/runtime.cpp:2026:
+  Runtime::VMFaultHandler: Assertion `false && "GPU memory access fault."'
+```
+
+The kernel log shows this is **not** a missing-page fault: `MAPPING_ERROR: 0x0`
+and `WALKER_ERROR: 0x0` (the page is mapped), with `PERMISSION_FAULTS: 0x5` and
+`RW: 0x1` — a device **write** denied on a resident managed page, which the
+driver then failed to promote, degrading a recoverable `retry page fault` into a
+fatal `no-retry` one. Retry faults are enabled, so `amdgpu.noretry` is not the
+problem. Full analysis in `docs/29`.
+
+The abort left an rwsem with no live owner, and amdgpu's SVM eviction workers
+stacked up behind it:
+
+```
+INFO: task kworker/44:10 blocked for more than 122 seconds.
+Workqueue: events svm_range_evict_svm_bo_worker [amdgpu]
+... blocked on an rw-semaphore, but the owner is not found.
+```
+
+Load average hit **70 and was still climbing**. Killing the arm drained it
+(70 → 34 → 20) and both GPUs recovered without a reset — `rocminfo` enumerated
+normally at 42–47 °C idle — but nothing stopped on its own: the harness
+recorded the failure and advanced to the next `-ub` value, re-triggering it.
+
+The prefill-amortisation argument for RAM-resident weights with GPU compute is
+untouched by this — **the fault happens at load, before any of it is
+exercised**. The idea is not refuted; this route to it is. `--offload-backend
+prefetch` on vLLM pursues the same goal with explicit staged copies and no
+XNACK. Kernel 7.0.0-28-generic, ROCm 7.14.
+
+`benchmarks/matrix/round15_unified_mem.sh` now refuses to run without
+`ALLOW_UVM_HANG=1`.
+
+**UD-IQ2_M wins both axes** — +11.2% prefill and **+27.5% decode** on a matched
+15k/25.8k pair. An earlier partial run put the prefill gain at +6.1% (208 t/s);
+the completed arm measures 217.8, and the decode gap is the larger effect.
+
+### Do not hand-place experts — `--n-cpu-moe` loses to auto-fit at every value
+
+Matched arms, same model (IQ3_XS), same prompts, only the placement changing:
+
+| Placement | Prefill @15k | Prefill @25.8k | Decode @25.8k |
+|---|---:|---:|---:|
+| **auto-fit** (135.57 GB on GPU) | **195.9** | **180.9** | **8.51** |
+| `--n-cpu-moe 60` | 159.7 | 151.9 | 7.47 |
+| `--n-cpu-moe 70` | 153.7 | 145.8 | 7.06 |
+| `--n-cpu-moe 80` | 140.9 | 140.4 | 6.77 |
+| `--n-cpu-moe 92` (all experts) | 141.0 | 134.1 | 6.36 |
+
+Monotone: every expert layer moved to the CPU costs throughput, and there is no
+knee to tune toward. Auto-fit beats the best manual value by **23% prefill** and
+**14% decode**.
+
+An earlier note here claimed the curve went "flat past 60". It does not — that
+came from comparing an auto-fit *cold16k* number against `--n-cpu-moe`
+*longctx* numbers. Matched workloads show a steady decline on both.
+
+**Reach for `--n-cpu-moe` only when the model does not otherwise fit.** It is a
+capacity mechanism, not a performance one.
 
 *(Tier 3, 235B, is running now — `unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF`
 UD-Q3_K_XL at 104.2 GB. It had no number because every vLLM-servable checkpoint

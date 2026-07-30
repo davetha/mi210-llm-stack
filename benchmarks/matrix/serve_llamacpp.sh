@@ -27,7 +27,11 @@ NAME="${2:?missing container name}"
 PORT="${3:?missing port}"
 shift 3
 
-IMAGE="llama-rocm714:latest"
+# LLAMA_IMAGE swaps the engine build without touching anything else, for A/B
+# against a differently-compiled llama.cpp. GGML_CUDA_FORCE_MMQ is a #ifdef
+# rather than an env var, so the only way to test it is a second image
+# (configs/Dockerfile.llama-forcemmq, same pinned commit, one flag changed).
+IMAGE="${LLAMA_IMAGE:-llama-rocm714:latest}"
 HOST_MODELS="/mnt/llm-storage"
 
 # Accept a directory and find the first shard inside it. GGUF repos often ship

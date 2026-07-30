@@ -36,7 +36,56 @@
 # object target from xnack-. The 242 translated AITER ASM kernels were built
 # for the default, so enabling XNACK globally could make them unloadable. It is
 # set per-container here, on llama.cpp arms only.
+#
+# ============================================================================
+# RESULT: THIS DOES NOT WORK ON THIS KERNEL, AND IT DAMAGES THE HOST.
+# ============================================================================
+#
+# Run 2026-07-29 22:0x. The -ub 2048 arm never finished loading:
+#
+#   llama-server: runtime/hsa-runtime/core/runtime/runtime.cpp:2026:
+#     Runtime::VMFaultHandler: Assertion `false && "GPU memory access fault."'
+#
+# A VM fault during weight load, i.e. the demand-paging path faulted on a
+# migration and the HSA runtime aborted rather than servicing it. The abort left
+# the kernel side holding an rwsem with no live owner, and amdgpu's SVM eviction
+# workers piled up behind it:
+#
+#   INFO: task kworker/44:10 blocked for more than 122 seconds.
+#   Workqueue: events svm_range_evict_svm_bo_worker [amdgpu]
+#   ... blocked on an rw-semaphore, but the owner is not found.
+#
+# Load average reached 70 and was still climbing, on a box that also serves
+# production. Killing the arm drained it (70 -> 34 -> 20) and both GPUs came
+# back healthy -- rocminfo enumerated, 42-47 C idle, no reset needed -- but the
+# harness did NOT stop on its own: run_arm.sh correctly recorded the failure and
+# moved straight to the -ub 4096 arm, re-triggering the fault. An automated
+# sweep is exactly the wrong shape for a failure mode that wedges kernel
+# workers.
+#
+# So the answer to "can we keep weights in RAM and compute on the GPU" is: not
+# by this route, on kernel 7.0.0-28 with this ROCm. The prefill-amortisation
+# argument above is still sound in principle and is untested -- the fault
+# happens at LOAD, before any of it is exercised. The vLLM prefetch offloader
+# (round 16) reaches the same goal by explicit staged copies instead of
+# demand paging, and does not involve XNACK at all.
+#
+# Re-running requires an explicit opt-in, because the cost of a mistake here is
+# a degraded host rather than a failed benchmark.
 set -uo pipefail
+
+if [ "${ALLOW_UVM_HANG:-0}" != "1" ]; then
+    cat >&2 <<'WARN'
+round15 is disabled: HSA_XNACK unified memory VM-faults at load on this kernel
+and leaves amdgpu svm_range_evict_svm_bo_worker threads wedged (load avg 70+,
+hung-task warnings). See the header of this script. To run it anyway:
+
+    ALLOW_UVM_HANG=1 ./bin/round15_unified_mem.sh
+
+and watch /proc/loadavg -- kill it the moment hung-task warnings appear.
+WARN
+    exit 1
+fi
 BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
 MODEL=$BASE/glm-gguf-iq3xs

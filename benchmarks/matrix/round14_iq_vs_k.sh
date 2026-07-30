@@ -35,17 +35,30 @@ NC=60
 cd "$BASE"
 
 . "$BIN/wait_for_bench.sh"
-bench_claim
-echo "=== $(date -u +%T) waiting for other bench work ==="
-bench_wait_for_others
-echo "=== $(date -u +%T) starting ==="
 
-if [ ! -d "$DEST" ] || [ -z "$(ls -A "$DEST" 2>/dev/null)" ]; then
-    echo "--- fetching GLM-4.6 UD-Q2_K_XL (134.7 GB) ---"
+# FETCH BEFORE CLAIMING -- same correction as round 12, which had the identical
+# bug and cost 35 minutes of idle GPU when its CDN connection stalled while it
+# sat at the head of the queue.
+#
+# This script cost another 40 minutes for the same reason, and it did so AFTER
+# round 12 was fixed. The lesson is not "round 12 had a bug"; it is that the
+# claim-then-fetch shape was copied into every round script that downloads
+# anything, and fixing the one that failed visibly left the copies in place.
+# Rounds 15, 16 and 17 were checked and fetch nothing, so this is the last one.
+#
+# A download needs no GPU. Only the arm does.
+if [ ! -d "$DEST" ] || [ -z "$(ls -A "$DEST" 2>/dev/null)" ] \
+   || ls "$DEST"/**/*.aria2 >/dev/null 2>&1 || ls "$DEST"/*.aria2 >/dev/null 2>&1; then
+    echo "=== $(date -u +%T) fetching GLM-4.6 UD-Q2_K_XL (134.7 GB), lock NOT held ==="
     python3 "$BIN/fetch_model.py" unsloth/GLM-4.6-GGUF "$DEST" \
         --include UD-Q2_K_XL --connections 1 --concurrent 4 \
         || { echo "!! fetch failed"; exit 1; }
 fi
+
+bench_claim
+echo "=== $(date -u +%T) waiting for other bench work ==="
+bench_wait_for_others
+echo "=== $(date -u +%T) starting ==="
 if ls "$DEST"/**/*.aria2 >/dev/null 2>&1 || ls "$DEST"/*.aria2 >/dev/null 2>&1; then
     echo "!! .aria2 present -- download incomplete, refusing to run"
     exit 1
