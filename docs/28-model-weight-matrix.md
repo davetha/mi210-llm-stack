@@ -93,7 +93,7 @@ Use dense models when you need their quality or ecosystem, not for throughput.
 | GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **217.8** | **10.85** @25.8k |
 | GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 195.9 | 8.51 @25.8k |
 | AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` (**UVA**) | — | — | ✗ **unusable** |
-| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | measuring | measuring |
+| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | ✗ **NCCL crash** | — |
 
 **vLLM's *UVA* offload is not viable at this tier** — one 28k request ran past
 35 minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
@@ -109,8 +109,16 @@ backends and only one was tested:
 
 The one that was measured is the one that cannot overlap. `--offload-params
 experts` further restricts either backend to the expert stacks, which on GLM-4.6
-is ~168 GB of the 176 GB. Round 16 measures the prefetch backend at 50/67/75%
-offload with a UVA control on the same harness.
+is ~168 GB of the 176 GB.
+
+**The prefetch backend does not currently work here either.** At 75% offload it
+crashed during load with `NCCL error: unhandled cuda error` in `ncclAllReduce`
+(worker TP1), then hung with the container still alive. A control run of
+`t35-w8a8` at TP=2 loaded normally on the same GPUs minutes later — 130 s,
+41.88 GiB KV cache — so this is the offloader, not the hardware. Untested
+mitigations: `--enforce-eager` (it joins a private copy stream into CUDA-graph
+captures, the most likely thing to break RCCL) and
+`VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1`. See `docs/29`.
 
 **vLLM has no managed-memory path at all** — zero references to
 `hipMallocManaged`/`cudaMallocManaged` in the package. So the llama.cpp
@@ -129,9 +137,15 @@ llama-server: hsa-runtime/core/runtime/runtime.cpp:2026:
   Runtime::VMFaultHandler: Assertion `false && "GPU memory access fault."'
 ```
 
-The demand-paging path faulted during a migration and the HSA runtime aborted
-instead of servicing it. The abort left an rwsem with no live owner, and
-amdgpu's SVM eviction workers stacked up behind it:
+The kernel log shows this is **not** a missing-page fault: `MAPPING_ERROR: 0x0`
+and `WALKER_ERROR: 0x0` (the page is mapped), with `PERMISSION_FAULTS: 0x5` and
+`RW: 0x1` — a device **write** denied on a resident managed page, which the
+driver then failed to promote, degrading a recoverable `retry page fault` into a
+fatal `no-retry` one. Retry faults are enabled, so `amdgpu.noretry` is not the
+problem. Full analysis in `docs/29`.
+
+The abort left an rwsem with no live owner, and amdgpu's SVM eviction workers
+stacked up behind it:
 
 ```
 INFO: task kworker/44:10 blocked for more than 122 seconds.
