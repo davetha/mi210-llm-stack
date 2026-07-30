@@ -292,29 +292,51 @@ smaller.** TTFT at 15k is 21.8 s against GLM's 77.5 s.
 The reason is that **it fits**. 104.2 GB sits inside 128 GB of VRAM with room
 for KV; GLM-4.6's 139 GB does not, and everything after that is paging.
 
-That shows up cleanly against the active-parameter law from the dense section:
+### Active-parameter scaling — apply it **within one engine**
 
-| Model | Active params | Fits? | Prefill | Predicted from 80B ×(3/active) |
-|---|---:|---|---:|---:|
-| Qwen3-Next-80B-A3B (W8A8) | 3B | yes | 7,253 | — |
-| **Qwen3-235B-A22B** | 22B | **yes** | **698** | ~989 |
-| GLM-4.6 (357B) | 32B | **no** | 196 | ~680 |
+An earlier version of this section compared llama.cpp measurements against a law
+derived from a *vLLM* baseline and concluded GLM-4.6 ran "3.5× below prediction",
+calling the gap the cost of not fitting. That mixed engines. Corrected, using each
+engine's own 3B-active baseline:
 
-The 235B lands within ~30% of what active-parameter scaling predicts. GLM-4.6
-comes in **3.5× below** its prediction — that gap is the cost of not fitting,
-not the cost of being bigger.
+**llama.cpp** (baseline: Qwen3-30B Q4_K_M, 3,415.7 t/s @ 3B active)
+
+| Model | Active | Predicted | Measured | |
+|---|---:|---:|---:|---|
+| **Qwen3-235B-A22B** UD-Q3_K_XL | 22B | ~466 | **698** | **1.5× above** |
+| GLM-4.6 IQ3_XS | 32B | ~320 | 196–218 | ~1.6× below |
+
+**vLLM** (baseline: Qwen3-Next-80B W8A8, 7,253 t/s @ 3B active)
+
+| Model | Active | Predicted | Measured | |
+|---|---:|---:|---:|---|
+| GLM-4.6 AWQ-Int4 + prefetch offload | 32B | ~680 | **695.9** | on the line |
+
+Within llama.cpp the fits/doesn't-fit spread is **~2.2×, not 3.5×** — and the
+235B *beats* its own engine's law, which the cross-engine version hid completely.
+
+**The law is too crude to carry more than a direction.** It ignores quantization
+format, attention geometry, and batch configuration, and the vLLM row uses a
+different quant (AWQ-Int4) from its own baseline (W8A8) — where tier 1 measures
+AWQ-Int4 *slower* than W8A8 at equal TP, so that row should have over-predicted
+and did not. Treat these as order-of-magnitude sanity checks.
 
 > **Choose the largest model that still fits VRAM, not the largest you can
-> page.** Crossing the VRAM line costs far more than the parameters buy.
+> page** — on llama.cpp with auto-fit placement. The 235B is the sweet spot there
+> and it is measured, not inferred.
 
-**Unless you page deliberately, in which case the penalty largely disappears.**
-GLM-4.6 AWQ-Int4 under vLLM's *prefetch* offloader — 75% of expert layers, ~126
-GB of weights resident in host RAM — measures **695.9 t/s prefill** (TTFT 21.92 s
-median over three reps at 15k, VRAM 131.16 GB). Against the ~680 predicted from
-active parameters, that is **on the line**: explicit staged copies recover
-essentially the whole not-fitting penalty for prefill. The row above (196 t/s,
-3.5× below prediction) is what *implicit* placement costs, not what the model
-costs. Decode is the opposite story — see the offload section.
+**Deliberate paging is a different regime.** GLM-4.6 AWQ-Int4 under vLLM's
+*prefetch* offloader — 75% of expert layers, ~126 GB in host RAM — measures
+**695.9 t/s prefill** (TTFT 21.92 s median, three reps at 15k, VRAM 131.16 GB),
+against 69.5–77.5 s TTFT for the same model kept on the cards as GGUF.
+
+**How much of that is the offloading is not yet established.** The arms differ in
+engine, tensor-parallel layout, batch size *and* placement simultaneously, and
+llama.cpp is not generally behind vLLM — at tier 1, GGUF Q4_K_M (3,416) beats
+vLLM AWQ-Int4 TP=1 (3,002). The isolating experiment is the 67% and 50% offload
+arms of round 18, which vary **only** the offload fraction: if prefill barely
+moves, the win is engine and configuration rather than the offload mechanism.
+Decode is the opposite story either way — see the offload section.
 
 ---
 
