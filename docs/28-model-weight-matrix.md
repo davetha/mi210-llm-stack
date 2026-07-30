@@ -393,7 +393,9 @@ Four fields, in `config.json` and the tensor index. None is in the repo name.
 |---|---|---|
 | `quantization_config.quant_method` | `compressed-tensors` | hours of load time |
 | `...group_0.input_activations` | populated, **`type: "int"`** | `"float"` is FP8 — dead on CDNA2 |
-| `head_dim` | 128 or 192 | no AITER ASM (+8–33% prefill), no custom paged attention |
+| `head_dim` | 128 or 192 | no AITER ASM prefill (+8–33%) — **bf16 objects only**, no fp16 |
+| `num_attention_heads / num_key_value_heads` | **exactly 8 or 16** | no ASM paged attention — that is the entire `pa` coverage (`docs/35`) |
+| `kv_lora_rank` | check **before** the head counts | if present the model is MLA and `num_key_value_heads` is vestigial — misreading this produced a 44× KV error (`docs/35`) |
 | tensor index for `mtp`/`nextn` | present, if you want MTP | quantizers strip it silently |
 
 Worked example of why the name lies: `cyankiwi/...AWQ-8bit` is **not AWQ** — it
