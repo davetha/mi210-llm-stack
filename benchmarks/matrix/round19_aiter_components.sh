@@ -97,15 +97,45 @@ run t35w8a8-aiter-all "$M35W" 35B w8a8
 # READY_TIMEOUT is raised to 5 hours because this loader legitimately takes 3.4.
 # --safetensors-load-strategy=prefetch is mandatory on btrfs (docs/25) and is not
 # automatic for local filesystems.
+# WHETHER fmoe ASM ACTUALLY RAN IS THE RESULT. Throughput alone cannot tell a
+# 1,129-MACs/ins ASM kernel from the CK/Triton fused_moe it falls back to, and
+# this project has published that exact mistake twice (docs/14, docs/16). The
+# per-arm evidence file run_arm.sh now writes is the discriminator; read it and
+# say so out loud, so the round log carries the verdict next to the number.
+fmoe_verdict() {
+    local label="$1"
+    python3 - "$BASE/results/$label-asm.json" "$label" <<'VERDICT' || true
+import json, sys
+path, label = sys.argv[1:3]
+try:
+    d = json.load(open(path))
+except Exception:
+    print("  VERDICT %s: no ASM evidence file -- attribution UNKNOWN" % label)
+    sys.exit(0)
+if not d.get("serverlog_readable", True):
+    print("  VERDICT %s: serverlog unreadable -- attribution UNKNOWN" % label)
+elif d.get("families", {}).get("fmoe"):
+    print("  VERDICT %s: fmoe ASM LOADED (%d objects) -- attributable"
+          % (label, d["families"]["fmoe"]))
+elif d.get("any_asm"):
+    print("  VERDICT %s: ASM loaded but NO fmoe (%s) -- MoE ran the fallback"
+          % (label, ", ".join(sorted(d.get("families", {})))))
+else:
+    print("  VERDICT %s: no ASM loaded at all -- MoE ran the fallback" % label)
+VERDICT
+}
+
 M35B=$BASE/t35-bf16
 if [ -d "$M35B" ]; then
     ARM_ENV="-e VLLM_ROCM_USE_AITER_LINEAR=0 -e VLLM_ROCM_USE_AITER_MOE=0"
     RT=18000 run t35bf16-aiter-base "$M35B" 35B bf16 \
         --safetensors-load-strategy=prefetch
+    fmoe_verdict t35bf16-aiter-base
 
     ARM_ENV="-e VLLM_ROCM_USE_AITER_LINEAR=1 -e VLLM_ROCM_USE_AITER_MOE=1"
     RT=18000 run t35bf16-aiter-all "$M35B" 35B bf16 \
         --safetensors-load-strategy=prefetch
+    fmoe_verdict t35bf16-aiter-all
 else
     echo "!! $M35B absent -- skipping the bf16 arms, which are the fmoe test"
 fi
