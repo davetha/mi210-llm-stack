@@ -159,8 +159,13 @@ echo "ready after ${elapsed}s"
 if [ -z "${LONGCTX_TOKENS:-}" ]; then
     ctx_arg=""
     prev=""
+    # --max-model-len is the vLLM spelling. Omitting it is how this bug came back:
+    # the clamp only knew the llama.cpp flags, so round 19's vLLM arms requested
+    # the default 262144 against a 131072 limit and every rep returned HTTP 400.
+    # Four arms lost their decode numbers -- the identical failure this block was
+    # written to prevent, in a different dialect.
     for a in "$@"; do
-        case "$prev" in --ctx-size|-c) ctx_arg="$a" ;; esac
+        case "$prev" in --ctx-size|-c|--max-model-len) ctx_arg="$a" ;; esac
         prev="$a"
     done
     if [ -n "$ctx_arg" ] && [ "$ctx_arg" -gt 0 ] 2>/dev/null; then
