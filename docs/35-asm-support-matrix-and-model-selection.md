@@ -49,7 +49,38 @@ All `noquant{Fp16,Bf16}`, all `g1u0`, all `32x512` (`docs/33`). So: **unquantize
 bf16/fp16 experts only**, plus `VLLM_ROCM_USE_AITER_MOE=1`, which this stack had
 been setting to `0` by hand.
 
-### MLA — `mla`, 11 objects. Status **open**, being measured.
+### MEASURED, 2026-07-30 — only one ASM family actually runs
+
+Rounds 19–22 tested every open row. **`fmha_v3_fwd` is the only AITER ASM family
+that runs on this box**, and each of the others fails for a *different* reason:
+
+| family | verdict | evidence |
+|---|---|---|
+| `fmha_v3_fwd` | ✅ **runs** | `.co` loads 44× per arm |
+| `pa` | ✗ **no call site** | `pa_fwd_asm` occurs 6× in vLLM 0.23.1, none a call. The kernels are fine — round 22 re-ran the standalone suite: **0 failures** |
+| `mla` | ✗ **flag inert** | `VLLM_ROCM_USE_AITER_MLA` 1 vs 0 → 8,630.8 / 93.34 vs 8,660.9 / 93.56 t/s. vLLM logs `Using FLASH_ATTN MLA` either way |
+| `fmoe` | ✗ **kernel declines the device** | `ValueError: Unquantized MoE backend ROCm AITER does not support the deployment configuration since kernel does not support current device rocm` |
+| `topksoftmax` | ❓ untested | no `.co` load ever observed |
+| `allreduce_*` | ❓ untested | best remaining lead — `N8192` matches Llama-3.3-70B's `hidden_size` |
+
+**The misread-gate pattern did not repeat.** `fmoe` is refused by a deliberate
+capability check, not an architecture string. `mla` is not gated at all — it is
+simply never selected. Only `pa` resembles the earlier cases, and there the fault
+is an absent call site rather than a wrong condition.
+
+`VLLM_ROCM_USE_AITER_LINEAR`/`_MOE` on the **int8** path measure flat on both
+axes: prefill 8351.5 / 8344.3 / 8364.8 / 8337.7 (0.32% spread), decode
+44.93 / 44.44 / 45.11 / 44.99 (1.5%). The research note marking them "NO-EFFECT"
+reached the right conclusion for W8A8 by the wrong reasoning — they are not
+architecture-gated, and `MOE=0` actively *removes* the backend.
+
+**Consequence for MLA models, including GLM-5.2**: their attention runs entirely
+on the Triton/CK fallback here. That removes the main reason to prefer a large
+MLA checkpoint on this hardware.
+
+---
+
+### MLA — `mla`, 11 objects. ~~Status open~~ **RESOLVED above: no ASM dispatch.**
 
 `docs/19` records that `mla.py` gates ASM on gfx942/gfx950. Reading the installed
 source does not support that:

@@ -169,6 +169,45 @@ unified-memory arms (round 15) and this are *not* the same mechanism: that one
 is OS demand paging, page-granular and unscheduled; this one is explicit,
 tensor-granular and prefetched.
 
+### GLM-4.6 (357B / 32B active) — every configuration measured
+
+The most thoroughly characterised model here. Prefill is @15k, decode @25.8k.
+
+| Config | Engine | Weights live | TTFT | Prefill | Decode |
+|---|---|---|---:|---:|---:|
+| AWQ-Int4, prefetch **50%** | vLLM | 42 GB/rank host | **19.0 s** | **800.7** | 0.62 |
+| AWQ-Int4, prefetch 67% | vLLM | 56 GB/rank host | 20.6 s | 729.9 | 0.47 |
+| AWQ-Int4, prefetch 75% | vLLM | 63 GB/rank host | 21.9 s | 695.9 | 0.42 |
+| AWQ-Int4, prefetch 75%, no pinning | vLLM | ″ | 23.2 s | 652.5 | 0.40 |
+| AWQ-Int4, **UVA** experts 45 GB | vLLM | host, zero-copy | 184.2 s | 82.4 | **2.40** |
+| UD-IQ2_M GGUF | llama.cpp | 135 GB GPU | 69.5 s | 217.8 | 10.85 |
+| IQ3_XS + `FORCE_MMQ` | llama.cpp | 135.6 GB GPU | — | 214.3 | 8.64 |
+| **UD-Q2_K_XL GGUF** | llama.cpp | ~135 GB GPU | 72.8 s | 208.5 | **11.52** |
+| IQ3_XS GGUF | llama.cpp | 135.6 GB GPU | 77.5 s | 204.5 | 8.62 |
+| IQ3_XS, `--n-cpu-moe 60` | llama.cpp | 60 layers on CPU | 94.2 s | 159.7 | 7.47 |
+| AWQ-Int4, UVA non-selective | vLLM | host, zero-copy | ✗ 35+ min/request | — | — |
+
+**The split is extreme and it is a genuine choice, not a ranking.** Best prefill
+(800.7) and best decode (11.52) come from different engines, different
+quantizations, and opposite placement strategies — and they differ by **3.9× on
+prefill and 18× on decode** in opposite directions.
+
+> **Long prompt, short answer** → vLLM AWQ-Int4 with prefetch offload. 19 s to
+> first token on 15k, against 70–77 s for any GGUF.
+>
+> **Anything that generates** → llama.cpp **UD-Q2_K_XL**. 11.52 t/s is slow but
+> usable; 0.62 t/s is not.
+
+**Prefetch and UVA invert against each other.** Prefetch wins prefill by 8.4×;
+UVA wins decode by 5.7× (2.40 vs 0.42). Prefetch stages whole layers, so batch-1
+decode pays to move weights it barely touches, while UVA's zero-copy reads only
+what is actually referenced. An earlier version of this doc called UVA simply
+"architecturally worse" — it is worse at prefill and better at decode, and the
+original catastrophe was caused by offloading **non-selectively** (attention
+weights included), which `--cpu-offload-params experts` fixes.
+
+---
+
 ### Do NOT use `HSA_XNACK=1` unified memory on this host
 
 Tried, and it does not merely lose — it damages the host. `HSA_XNACK=1` plus
