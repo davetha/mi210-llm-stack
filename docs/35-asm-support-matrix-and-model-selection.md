@@ -49,6 +49,54 @@ All `noquant{Fp16,Bf16}`, all `g1u0`, all `32x512` (`docs/33`). So: **unquantize
 bf16/fp16 experts only**, plus `VLLM_ROCM_USE_AITER_MOE=1`, which this stack had
 been setting to `0` by hand.
 
+### ROOT CAUSE, 2026-07-30 — one upstream predicate explains all of it
+
+Everything below was diagnosed family by family before the common cause turned
+up. It is a single line in **upstream** vLLM:
+
+```python
+# vllm/_aiter_ops.py (upstream ~line 88; line 76 on our patched image)
+def is_aiter_found_and_supported() -> bool:
+    if current_platform.is_rocm() and IS_AITER_FOUND:
+        from vllm.platforms.rocm import on_mi3xx
+        return on_mi3xx()          # gfx942 / gfx950 ONLY -- gfx90a is False
+    return False
+```
+
+`rocm_aiter_ops.is_enabled()` is decorated with `@if_aiter_supported`, whose
+wrapper returns **`None`** when that predicate is false. So on gfx90a
+`is_enabled()` is falsy no matter what `VLLM_ROCM_USE_AITER` is set to, and every
+AITER capability routed through it is off. That accounts for:
+
+- **`fmoe`** — `ValueError: ... kernel does not support current device rocm`
+- **`AITER_LINEAR` / `_MOE`** — flat on int8, 0.32% prefill and 1.5% decode spread
+- **the allreduce `NameError`** (round 24) — `is_enabled()` false took the `else`
+  branch, which references a symbol imported only under `is_cuda()`
+- **why this project already had to patch around it for attention at all**
+
+This repo's own `configs/enable_vllm_aiter_gfx90a.py` adds
+`is_aiter_attention_supported()` keyed on `on_gfx9()` instead — a deliberate,
+narrow carve-out that is why `fmha_v3_fwd` runs while nothing else does. Upstream
+defines no such function.
+
+| symbol | origin | gate |
+|---|---|---|
+| `is_aiter_found_and_supported()` | **upstream** | `on_mi3xx()` |
+| `if_aiter_supported` | **upstream** | ″ |
+| `is_aiter_attention_supported()` | **ours** | `on_gfx9()` |
+| `if_aiter_attention_supported` | **ours** | ″ |
+
+> **CORRECTION.** Round 19's writeup claimed these flags "are not
+> architecture-gated", on the strength of `refresh_env_variables()` assigning
+> `_LINEAR_ENABLED` / `_FMOE_ENABLED` straight from the environment with no arch
+> check. That reading was right about the assignment and wrong about the
+> conclusion: the gate sits one level up, in the decorator on `is_enabled()`,
+> which was not read. The research note in `benchmarks/matrix/research/` marking
+> both flags "NO-EFFECT — fails gate" was closer to correct than the correction
+> issued against it.
+
+---
+
 ### MEASURED, 2026-07-30 — only one ASM family actually runs
 
 Rounds 19–22 tested every open row. **`fmha_v3_fwd` is the only AITER ASM family

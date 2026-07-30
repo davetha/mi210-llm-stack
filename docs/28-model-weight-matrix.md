@@ -169,6 +169,62 @@ unified-memory arms (round 15) and this are *not* the same mechanism: that one
 is OS demand paging, page-granular and unscheduled; this one is explicit,
 tensor-granular and prefetched.
 
+### Qwen3-235B AWQ-Int4 — the right model, unservable for now
+
+`QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ` is the only large checkpoint found
+that satisfies the whole fast-path profile in `docs/35`: `head_dim` 128,
+64 heads / 4 KV = **GQA ratio 16** (one of exactly two ratios the ASM `pa`
+kernels exist for), no `kv_lora_rank`, bfloat16, 116 GB, unpruned. Every GLM-5.2
+variant fails that profile structurally because MLA routes elsewhere.
+
+**Both round-23 arms timed out at 3600 s without serving:**
+
+```
+WARNING [awq_marlin.py:316] Layer 'model.layers.93.mlp.experts' is not supported
+  by AWQMoeMarlin. Falling back to Moe WNA16 kernels.
+Loading safetensors checkpoint shards: 8% | 2/25 [43:32<8:33:11, 1338.78s/it]
+```
+
+**~9.3 hours projected.** Marlin declines the expert layers — it is CUDA-only
+here — and AWQ then lands on the same `moe_wna16_weight_loader` that makes
+`gptq` MoE catastrophic. The 12.5%-offload arm failed identically, as expected:
+offload changes where weights live, not how they arrive.
+
+Two secondary observations from that log: the arm omitted
+`--safetensors-load-strategy=prefetch`, which `docs/25` documents as mandatory on
+btrfs (it would not have saved this — storage delivers in seconds against hours —
+but it is a real gap in the arm), and `Op 'sparse_attn_indexer' not present in
+model` incidentally confirms Qwen3-235B has no indexer, unlike GLM-5.2.
+
+**`docs/34`'s `sharded_state` is the fix for this model too**, not just bf16 —
+the flat `param_data.copy_()` path never touches `weight_loader`. That makes the
+one-time conversion the unblocking step for the best fast-path candidate we have.
+
+### Fused allreduce+RMSNorm — blocked by an upstream `NameError`
+
+`t70-w8a8` baseline reproduced this doc exactly (**843 prefill / 6.8 decode**),
+which validates the harness. Both fusion arms died during load:
+
+```
+pass_manager.py:158
+    self.passes += [AllReduceFusionPass(config)]
+                    ^^^^^^^^^^^^^^^^^^^
+NameError: name 'AllReduceFusionPass' is not defined
+```
+
+`is_enabled()` is falsy on gfx90a (see the root cause in `docs/35`), so the gate
+takes its `else` branch — which references a symbol imported only under
+`if current_platform.is_cuda()`. ROCm is `is_cuda_alike()` but **not**
+`is_cuda()`, so on any ROCm host with `fuse_allreduce_rms=True` and AITER
+unavailable, vLLM crashes instead of degrading. That is an architecture-neutral
+upstream bug worth reporting on its own.
+
+Also visible in the resolved config: **`fuse_norm_quant` already defaults to
+`True`**, so one of the three "unset" fusion flags was running in every arm ever
+measured. Only `fuse_allreduce_rms` and `fuse_act_padding` were off. And
+`disable_custom_all_reduce=True` appears because there is no XGMI — so even with
+the pass loaded, `initialize_aiter_allreduce()` may have nothing to bind to.
+
 ### GLM-4.6 (357B / 32B active) — every configuration measured
 
 The most thoroughly characterised model here. Prefill is @15k, decode @25.8k.
@@ -415,7 +471,7 @@ anyway — so the gap only opens once the CPU is doing the arithmetic.
 | Weights | Why | Evidence |
 |---|---|---|
 | **FP8, any model** | CDNA2 has **no FP8 ALU**. `v_mfma_f32_*_fp8_fp8` is rejected by the assembler. Every weight upcasts to bf16, so you pay dequantization and get nothing. | **1,047 t/s vs AWQ-Int4's 3,002 — 2.9× slower** |
-| **`gptq`-packaged MoE** | `moe_wna16_weight_loader` runs per expert per weight, single-threaded Python. 128 experts × 48 layers. | **>46 min, never reached serving.** 235B projects to ~7 h |
+| **any MoE that falls back to WNA16** — including **AWQ-Int4** at scale | `moe_wna16_weight_loader` runs per expert per weight, single-threaded Python. Not a `gptq` property: AWQ lands here too once Marlin declines the expert layers, and Marlin is CUDA-only on this box. | **gptq: >46 min, never served.** AWQ 235B measured **1,339 s/shard × 25 = ~9.3 h**, both arms timed out |
 | **`compressed-tensors` 4-bit with `type:"int"`** | The one ROCm-capable mixed-precision kernel accepts `uint4b8`/`uint4`, **not signed `int4`**. AWQ and GPTQ emit the unsigned form and work. | Fails at load: `Quant type int4 not supported` |
 | **W4A8 (any)** | Two independent blockers: no ROCm kernel takes int8 activations, *and* none accepts signed int4 weights. | `docs/27` — kernel-by-kernel refusal |
 | **bf16 for a MoE you restart** | 12,366 s load against 60 s for the same model as W8A8. | 206× |
