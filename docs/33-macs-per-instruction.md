@@ -25,13 +25,26 @@ Normalised to **MACs per issued instruction**, whole-kernel:
 | AITER `fmoe` (MoE expert FFN) | hand ASM | 8 | **1,058** | 1,152 |
 | AITER `fmha_v3_fwd` | hand ASM | 48 | 602 | 868 |
 | AITER `pa` | hand ASM | 8 | 539 | 656 |
+| vLLM **shipping `fused_moe`** | Triton | — | **195** | 496 |
 | llama.cpp `mul_mat_q`/`mul_mat_f` | HIP | 1,545 | 98.6 | 263 |
-| vLLM Triton `32x32x8f16` | Triton | 1,757 | 85.0 | — |
-| vLLM Triton `16x16x16f16` | Triton | 1,131 | 39.1 | — |
+| vLLM Triton FP8 blockscale `32x32x8f16` | Triton | 1,757 | 85.0 | — |
+| vLLM Triton FP8 blockscale `16x16x16f16` | Triton | 1,131 | 39.1 | — |
 
 **The hand-written ASM proves 539–1,058 MACs/instruction is achievable on this
-chip.** The compiled GEMM path sits **6–13× below** that. That is the number
-`docs/30` was missing.
+chip.** That is the ceiling `docs/30` was missing.
+
+> **Corrected.** An earlier version of this table omitted the `fused_moe` row and
+> concluded the compiled path sits "6–13× below" the ASM ceiling. That used the
+> **FP8 blockscale** kernels as the baseline — and `docs/30` had already
+> established those are the known-pathological family and *not* the path that
+> ships. Recounting the actually-served `fused_moe` gives **195 median / 496
+> best**, so the real gap to ASM is roughly **2–5×**, not 6–13×. The FP8 rows are
+> retained as the outlier they are.
+>
+> That also retires the "brackets the ~3× decode gap" inference, which was wrong
+> twice over: the denominators differ (issue capability vs bandwidth), *and* the
+> 6–13× input was itself the wrong baseline. `fused_moe` numbers reported by
+> Andrei-Dr; not independently re-verified here, unlike the `fmoe` row below.
 
 ### Independent verification of the top row
 
@@ -109,19 +122,21 @@ saying `fmoe` works.
 
 ## Two framing points to keep straight
 
-**"6–13× below the ceiling" does not bracket the ~3× decode gap.** Those are
+**A ratio against the ceiling does not bracket the ~3× decode gap.** Those are
 different denominators — 3.1× is against a *bandwidth* bound (`docs/25` item 1c,
-as resized), while 6–13× is against *issue capability*. A kernel 10× off peak
-issue efficiency need not be 10× slow end-to-end, because it may spend much of
-its time waiting on memory regardless. The static ratio is *consistent with* an
-issue-bound decode path; it does not measure it.
+as resized), while the MACs/ins ratio is against *issue capability*. A kernel 5×
+off peak issue efficiency need not be 5× slow end-to-end, because it may spend
+much of its time waiting on memory regardless. The static ratio is *consistent
+with* an issue-bound decode path; it does not measure it. (Retracted by its
+author as well as here.)
 
-**The Triton kernels counted may not be the decode path.** `docs/30` notes the
-cached set is dominated by the FP8 blockscale family, and that **no int8
-`w8a16`, `fused_moe` or `wna16` kernel is cached anywhere on the box**. The path
-that actually ships (`docs/24`: W8A8 dense + W8A16 experts) has never been
-counted. That caveat applies to using these Triton numbers as the decode
-baseline.
+**Count the path that ships, not the path that is cached.** This was the trap in
+the first version of the table. `docs/30` observed that the Triton cache is
+dominated by the FP8 blockscale family and that the shipping path (`docs/24`:
+W8A8 dense + W8A16 experts) was **never cached anywhere on the box** — then the
+first table used the FP8 numbers as the baseline anyway, tripling the apparent
+gap. Recounting `fused_moe` fixed it. The general rule: a kernel being *available
+to count* is not evidence it *runs*.
 
 `rocprofv3 --kernel-trace` on decode steady-state supplies the dynamic half and
 would settle both points.
