@@ -90,7 +90,24 @@ bench_wait_for_others() {
         done
         # Containers are unambiguous -- no shell command line can impersonate a
         # container name -- so these are always worth waiting for.
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^bench-'; then
+        #
+        # ANYTHING HOLDING VRAM MUST MATCH THIS PATTERN. A manual diagnostic was
+        # once named `nccl-probe`, WITHOUT the bench- prefix, specifically so it
+        # would not confuse this check. That is what made it dangerous: an
+        # unprefixed container is invisible here, so the next round started arms
+        # on top of a TP=2 probe holding 41.88 GiB of KV cache per rank. Two
+        # arms died with cudaMalloc out-of-memory and a third silently fitted
+        # itself to the reduced VRAM and reported 132 t/s against a ~196 t/s
+        # expectation -- the failures were loud, the wrong number was not.
+        #
+        # A manual diagnostic IS bench work. Name it `bench-*` or `probe-*` so
+        # it blocks the queue, or take a claim with bench_claim. Opting out of
+        # both is the one thing that must not happen. See docs/29.
+        #
+        # Deliberately NOT "any container using /dev/kfd": this box also runs
+        # production inference, and blocking on that would wedge the queue
+        # forever rather than serialise against it.
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^(bench|probe)-'; then
             blocking=1
         fi
         [ "$blocking" = "0" ] && return 0
