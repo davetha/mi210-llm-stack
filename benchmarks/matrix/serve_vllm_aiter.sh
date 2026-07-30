@@ -23,6 +23,12 @@ docker run -d --name "$NAME" \
   -e VLLM_PLUGINS= \
   -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=100G -e CCACHE_DEPEND=1 \
   -e PYTHONHASHSEED=0 \
+  `# Per-arm environment passthrough, unquoted on purpose so several "-e K=V"` \
+  `# pairs split into separate docker arguments. Without this, an arm that sets` \
+  `# e.g. VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 would run with the flag` \
+  `# silently absent and report the result as though it had been applied --` \
+  `# the same class of error as VLLM_IMAGE being hardcoded above.` \
+  ${VLLM_EXTRA_ENV:-} \
   --entrypoint vllm "$IMAGE" serve "${MODEL_DIR/#$H//models}" \
     --served-model-name bench --host 0.0.0.0 --port 8000 \
     --tensor-parallel-size "${TP:-1}" --gpu-memory-utilization 0.90 \
