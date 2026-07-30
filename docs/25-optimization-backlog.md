@@ -475,14 +475,50 @@ bandwidth-bound:**
 | MI210 HBM2e bandwidth | 1.6 TB/s |
 | time to stream weights once | 22.7 ms → **44 t/s** if bandwidth-bound |
 | **observed decode** | **6.85 t/s → 146 ms/token** |
-| **ratio** | **6.4× slower than the bandwidth bound** |
+| **ratio (SUPERSEDED — see the resize below)** | 6.4× |
+
+> **RESIZED, 2026-07-30 — the gap is ~3.1×, not 6.4×.** The table above used
+> *peak* HBM (1.6 TB/s) and omitted KV traffic entirely. Both are wrong for a
+> bound you intend to compare against. Redone with the achieved bandwidths this
+> repo already measured — 73% of peak for decode-shape GEMM (`docs/20`) and
+> 593–611 GB/s for HIP paged attention
+> (`benchmarks/asm-attention-gfx90a.md`) — plus the missing KV term:
+>
+> | term | bytes/rank | at achieved BW | ms |
+> |---|---:|---|---:|
+> | weights | 36.4 GB | 1.17 TB/s | 31.1 |
+> | KV (80 layers × 8 KV heads ÷ 2 ranks, 320 KiB/tok) | 9.8 GB | 0.60 TB/s | 16.4 |
+> | **predicted** | 46.2 GB | | **47.5 → 21 t/s** |
+> | observed | | | **146 → 6.85 t/s** |
+>
+> **~3.1× unexplained.** Roughly 40% of what this item called unexplained was
+> peak-vs-achieved plus the omitted KV term — my own methodology, not the
+> hardware. That matters for prioritisation: 3× is plausibly reachable by
+> instruction-count work, whereas 6.4× invited hunting for a bigger structural
+> cause than exists.
+>
+> The review also supplied the literature anchor this item lacked. Hazy
+> Research's megakernel work measured **stock vLLM and SGLang at ~50% of H100
+> bandwidth at batch 1**, rising to 78% once the whole forward pass is fused into
+> one persistent kernel. Batch-1 decode sitting well off its bound is the
+> *normal* failure mode, not a CDNA2 artifact — this box is a worse instance of a
+> known 2×. What does not port: every megakernel implementation is
+> warp-specialised around TMA + `cp.async` + `wgmma` + wave32. The idea (fewer,
+> larger, persistent kernels) travels; the code does not.
+>
+> Caught by outside review of `07d50b8`.
 
 Speculative decoding's entire premise is that verifying N+1 tokens is nearly
 free *because you are memory-bound reading all the weights anyway*. At 6.4× off
 that bound, decode is dominated by something else — launch overhead,
 dequantization compute, or plain kernel inefficiency — and that something scales
-with tokens processed. So verifying N+1 tokens costs roughly N+1×, and
-speculation loses **on every architecture**, which is exactly what was measured.
+with tokens processed. So verifying N+1 tokens costs roughly N+1×, which is
+exactly what was measured.
+
+**"Speculation loses on every architecture" was too strong, though.** On
+optimized CUDA decode — ~1.45× off its bound — the premise roughly holds. It
+loses *here* because of the ~3×. The MTP and n-gram arms should therefore be
+re-run **after** the gap closes rather than treated as permanently closed.
 
 **The much bigger finding is the 6.4× itself.** Decode has been treated as the
 weak axis of this box without asking what bound it was against. It is not
@@ -491,10 +527,17 @@ speculation ever was, and it likely explains the W8A16-experts result in
 `docs/24` as well: dequantize-then-bf16-GEMM is exactly the kind of per-token
 compute that would put decode 6× off a bandwidth bound.
 
-**Confidence: high** that speculation loses here and why, **high** on the 6.4×
-figure, **untested** on what specifically consumes the other 123 ms/token.
-Profiling a decode step with `py-spy --native` or `rocprof` is the obvious next
-move and has not been done.
+**Confidence: high** that speculation loses here and why, **high** on the ~3.1×
+figure, **untested** on what specifically consumes the remaining ~98 ms/token.
+
+The decomposition, concretely: `rocprofv3 --kernel-trace --hip-trace` on decode
+**steady state** — skipping prefill and the first token. Sum of kernel durations
+against wall clock gives the launch-bound fraction; the dispatch→kernel-start gap
+gives per-launch cost. That separates all three suspects in one run. For
+roofline, `rocprof-compute profile --roof-only`: MI210 resolves to the **`MI200`**
+target directory with metrics under **`gfx90a`**, L2-Fabric is block **17**
+(`17.1.2` hit%, `17.1.3` read BW), speed-of-light is block **1**. Remember wave64
+changes the occupancy arithmetic against any CUDA intuition.
 
 ---
 

@@ -46,7 +46,9 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 ### The bottleneck
 
-`mimo` is a **full-attention CPU-hybrid MoE**. Prefill pushes every prompt token through all 48 layers — including the 25 CPU-resident ones — and attention is O(n²). The result: **prefill is CPU-dominated** (~7.4 s per chunk reading the growing KV cache back from DDR4), even though decode is GPU-bound at ~22 t/s. This whole optimization session was about attacking that prefill bottleneck from every angle.
+`mimo` is a **full-attention CPU-hybrid MoE**. Prefill pushes every prompt token through all 48 layers — including the 25 whose expert FFNs are CPU-resident. The result: **prefill is CPU-dominated** (~7.4 s per chunk), even though decode is GPU-bound at ~22 t/s. This whole optimization session was about attacking that prefill bottleneck from every angle.
+
+> **Correction.** This used to read "~7.4 s per chunk reading the growing KV cache back from DDR4", which was wrong. `launch-mimo.sh` passes `-ngl 999` and an `-ot` regex matching only `ffn.*exps`, so **every attention block and the whole KV cache live in HBM** (`-ctk q8_0 -ctv q4_1`). There is no DDR4 KV re-read and the O(n²) attention runs on the 1.6 TB/s side. The 7.4 s is 25 layers of Q4_K expert-FFN GEMM on the CPU. The placement was already right; the explanation attached to it was not, and it pointed at sparse-attention work that the FLOP crossover says is aimed at the smaller term below ~800k tokens. Caught by outside review, 2026-07-30.
 
 ---
 

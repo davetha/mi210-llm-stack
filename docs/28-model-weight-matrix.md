@@ -196,6 +196,46 @@ came from comparing an auto-fit *cold16k* number against `--n-cpu-moe`
 **Reach for `--n-cpu-moe` only when the model does not otherwise fit.** It is a
 capacity mechanism, not a performance one.
 
+### The CPU expert path is issue-bound, not DDR4-traffic-bound
+
+Worth stating because the traffic model predicts the opposite and is wrong.
+
+The argument for raising `-ub` on the CPU path: with `E` experts and `k` active
+per token, distinct experts touched per chunk is `E·(1−(1−k/E)^c)`, which
+saturates at `E` once `c ≳ E/k`. GLM-4.6 routes 8 of 160, so saturation is ~20
+tokens and `-ub 2048` is 100× past it — every chunk drags the whole CPU-resident
+expert set across DDR4. Total traffic is then `(n/c)·E·bytes`, **monotonically
+decreasing in `c`**, predicting ~2× from 2048 → 4096.
+
+Measured, at `--n-cpu-moe 60`:
+
+| `-ub` | Prefill @15k |
+|---:|---:|
+| 1024 | 119.6 |
+| **2048** | **164.6** |
+| 4096 | 158.1 |
+
+**4096 is 4% worse, not 2× better.** The traffic model is refuted — the expert
+weights are not what the chunk size is trading against.
+
+Two independent lines say the binding constraint is dequantization work, not
+bytes moved:
+
+1. **K-quants beat I-quants by 36% decode on this path** at essentially equal
+   byte counts (~135 GB either way, above). Traffic cannot explain a 36% gap
+   between two files of the same size; per-weight instruction cost can —
+   K-quants are scaled integer blocks AVX2 handles directly, I-quants need a
+   codebook lookup with no vector equivalent on Zen3.
+2. `/proc/cpuinfo` has no `avx_vnni`, no `avx512_vnni`, no `amx_int8`, and
+   `libggml-cpu.so` disassembles to **927 `vpmaddubsw` / 722 `vpmaddwd` / zero
+   `vpdpbusd`** — the classic three-instruction AVX2 int8 sequence, which is
+   correct here rather than a missed optimisation, and which fixes the per-weight
+   cost floor.
+
+So the lever on the CPU path is **thread placement and quant family**, not chunk
+size. `-t 24` (physical cores) is worth 18% decode over 48; `-tb` barely matters;
+`-ub 2048` was already right.
+
 ---
 
 ## Tier 3 — ~235B MoE (Qwen3-235B-A22B-Instruct-2507) — **the sweet spot**
