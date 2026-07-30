@@ -14,9 +14,11 @@ unless noted. Load is wall-clock to first served request.
 | Want | Run |
 |---|---|
 | **Best all-round** | `RedHatAI/*-quantized.w8a8` on vLLM at **TP=2** |
+| **Biggest model worth running** | **Qwen3-235B-A22B UD-Q3_K_XL** — 104 GB fits, 698 t/s |
 | **Smallest that still flies** | AWQ-Int4 on vLLM, TP=1 |
 | **Long context (>128k)** | GGUF **Q8_0 / Q4_K_M** on llama.cpp |
-| **Never** | **FP8**, `gptq`-packaged MoE, `compressed-tensors` 4-bit with `type:"int"` |
+| **Any expert layers on CPU** | a **K-quant** — I-quants lose 36% decode there |
+| **Never** | **FP8**, `gptq`-packaged MoE, `compressed-tensors` 4-bit with `type:"int"`, **`HSA_XNACK` unified memory** |
 
 ---
 
@@ -194,9 +196,66 @@ came from comparing an auto-fit *cold16k* number against `--n-cpu-moe`
 **Reach for `--n-cpu-moe` only when the model does not otherwise fit.** It is a
 capacity mechanism, not a performance one.
 
-*(Tier 3, 235B, is running now — `unsloth/Qwen3-235B-A22B-Instruct-2507-GGUF`
-UD-Q3_K_XL at 104.2 GB. It had no number because every vLLM-servable checkpoint
-fails differently; llama.cpp sidesteps the loader entirely.)*
+---
+
+## Tier 3 — ~235B MoE (Qwen3-235B-A22B-Instruct-2507) — **the sweet spot**
+
+| Weights | Engine | On GPU | Prefill @15k | Prefill @25.8k | Decode |
+|---|---|---:|---:|---:|---:|
+| GGUF **UD-Q3_K_XL** `unsloth/...GGUF` | llama.cpp | 104.2 GB | **698.2** | 628.6 | **23.09** |
+| GPTQ-Int4 `...t235-gptq4` | vLLM | — | — | — | ✗ never loads |
+
+**3.4× the prefill and 2.7× the decode of GLM-4.6 (357B), on a model only 34%
+smaller.** TTFT at 15k is 21.8 s against GLM's 77.5 s.
+
+The reason is that **it fits**. 104.2 GB sits inside 128 GB of VRAM with room
+for KV; GLM-4.6's 139 GB does not, and everything after that is paging.
+
+That shows up cleanly against the active-parameter law from the dense section:
+
+| Model | Active params | Fits? | Prefill | Predicted from 80B ×(3/active) |
+|---|---:|---|---:|---:|
+| Qwen3-Next-80B-A3B (W8A8) | 3B | yes | 7,253 | — |
+| **Qwen3-235B-A22B** | 22B | **yes** | **698** | ~989 |
+| GLM-4.6 (357B) | 32B | **no** | 196 | ~680 |
+
+The 235B lands within ~30% of what active-parameter scaling predicts. GLM-4.6
+comes in **3.5× below** its prediction — that gap is the cost of not fitting,
+not the cost of being bigger.
+
+> **Choose the largest model that still fits VRAM, not the largest you can
+> page.** Crossing the VRAM line costs far more than the parameters buy.
+
+---
+
+### I-quants vs K-quants at tier 4 — K-quants own decode, and own CPU offload
+
+Same model (GLM-4.6), same placement, ~135 GB on GPU in every case:
+
+| Weights | Family | Prefill @15k | Decode @25.8k |
+|---|---|---:|---:|
+| UD-IQ2_M | I-quant | **217.8** | 10.85 |
+| **UD-Q2_K_XL** | K-quant | 208.5 | **11.52** |
+| IQ3_XS | I-quant | 195.9 | 8.51 |
+
+No family sweeps both: UD-IQ2_M takes prefill by 4.5%, UD-Q2_K_XL takes decode
+by 6.2%, and IQ3_XS loses to both despite being the largest.
+
+**With experts on the CPU the K-quant advantage widens sharply.** At
+`--n-cpu-moe 60`:
+
+| Weights | Prefill | Decode |
+|---|---:|---:|
+| UD-Q2_K_XL | **166.2** | **10.13** |
+| IQ3_XS | 159.7 | 7.47 |
+
+**+36% decode.** K-quants are scaled integer blocks that AVX2 handles directly;
+I-quants need a codebook lookup per weight, which has no vector equivalent on
+Zen3. On the GPU both reach MFMA — `ggml_cuda_should_use_mmq` admits IQ2_XXS
+through IQ4_XS, and every MoE here clears its `n_experts > 64` short-circuit
+anyway — so the gap only opens once the CPU is doing the arithmetic.
+
+> **If any expert layer will live on the CPU, pick a K-quant.**
 
 ---
 

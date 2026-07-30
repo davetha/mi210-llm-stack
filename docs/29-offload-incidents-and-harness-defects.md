@@ -201,8 +201,30 @@ manual diagnostic is bench work; it should either take a claim or use the
 
 | item | state |
 |---|---|
-| Re-run round 17 (MMQ A/B) on clean GPUs | required — all 3 arms invalid |
-| Fail-fast on crashed-but-alive containers | not started |
-| Make diagnostics visible to the FIFO | not started |
+| Fail-fast on crashed-but-alive containers | **done** — `run_arm.sh` scans for worker-fatal patterns |
+| Make diagnostics visible to the FIFO | **done** — the check now matches `^(bench\|probe)-` |
+| Re-run round 17 (MMQ A/B) on clean GPUs | **running** (01:39) |
 | UVM isolation probe (1-GPU / 2-GPU / oversubscribed) | designed, not run |
 | vLLM prefetch retry with `--enforce-eager` | not started |
+
+### Why the contaminated round 17 had to be thrown away rather than salvaged
+
+The invalid A/B looked like a *spectacular* result, which is precisely the
+danger:
+
+| arm | prefill @15k | prefill @25.8k | decode |
+|---|---:|---:|---:|
+| `mmqbase` (ran during the probe) | 132.4 | 130.8 | **1.48** |
+| `forcemmq` (ran after it) | 218.8 | 189.2 | **8.57** |
+
+Read naively that is +65% prefill and a **5.8× decode win** for
+`GGML_CUDA_FORCE_MMQ`. It is not. A GEMM dispatch change cannot plausibly move
+decode 5.8×; VRAM starvation can, because `NGL=auto` fitted fewer layers onto
+the GPU while the probe held ~42 GiB per rank. The baseline ran degraded and the
+treatment ran clean.
+
+For scale, `forcemmq`'s 218.8 against the *historical* clean auto-fit baseline
+of 195.9 is ~+12% prefill with decode essentially unchanged (8.57 vs 8.51) —
+a modest, mechanically plausible result, and the one the re-run should confirm
+or refute. The lesson is that a contaminated control can manufacture a headline
+number, and headline numbers are exactly what nobody re-checks.

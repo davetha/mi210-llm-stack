@@ -101,11 +101,43 @@ esac
 
 # Poll for readiness, but bail early if the container dies -- otherwise a model
 # that OOMs on load burns the full READY_TIMEOUT before reporting.
+#
+# THE CONTAINER-EXITED CHECK IS NOT ENOUGH. A vLLM worker rank can die while the
+# container stays up: the engine keeps running and waits forever on the dead
+# rank, printing "shm_broadcast: no available block" once a minute. Neither the
+# readiness curl nor the container check fires, so the arm burns the FULL
+# READY_TIMEOUT. That is exactly how the prefetch-offload arm cost an hour --
+# it had already crashed at 22:47 with
+#
+#   Worker_TP1: RuntimeError: NCCL error: unhandled cuda error in ncclAllReduce
+#
+# and four more arms behind it would each have repeated the 90-minute wait, for
+# a total of six hours to learn nothing new. See docs/29.
+#
+# The grace counter matters. A single match is not proof: a healthy start can
+# log a caught traceback, so the pattern must still be present 60s later before
+# the arm is failed. And the pattern is deliberately narrow -- every healthy
+# vLLM start logs "ERROR ... Failed to import Triton kernels", so anything
+# matching a bare "ERROR" would fail every arm.
+FATAL_RE='NCCL error|RuntimeError:|Assertion .* failed|CUDA error: |HSA_STATUS_ERROR'
 echo "waiting for $NAME to become ready (timeout ${READY_TIMEOUT}s)..."
 elapsed=0
+crash_seen=0
 until curl -sf -m 5 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; do
     if ! docker ps --filter "name=^${NAME}$" --format '{{.Names}}' | grep -q .; then
         fail "container exited during load"; exit 1
+    fi
+    if [ $((elapsed % 60)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
+        hit=$(docker logs --tail 500 "$NAME" 2>&1 | grep -oE "$FATAL_RE.*" | tail -1)
+        if [ -n "$hit" ]; then
+            crash_seen=$((crash_seen + 1))
+            echo "  fatal pattern in server log (${crash_seen}/2): $hit"
+            if [ "$crash_seen" -ge 2 ]; then
+                fail "worker crashed during load: $hit"; exit 1
+            fi
+        else
+            crash_seen=0
+        fi
     fi
     sleep 10; elapsed=$((elapsed + 10))
     if [ "$elapsed" -ge "$READY_TIMEOUT" ]; then
