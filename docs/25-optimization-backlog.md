@@ -506,7 +506,7 @@ bandwidth-bound:**
 > warp-specialised around TMA + `cp.async` + `wgmma` + wave32. The idea (fewer,
 > larger, persistent kernels) travels; the code does not.
 >
-> Caught by outside review of `07d50b8`.
+> Caught by outside review of `07d50b8` by [Andrei-Dr](https://github.com/Andrei-Dr).
 
 Speculative decoding's entire premise is that verifying N+1 tokens is nearly
 free *because you are memory-bound reading all the weights anyway*. At 6.4× off
