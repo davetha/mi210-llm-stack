@@ -95,7 +95,8 @@ Use dense models when you need their quality or ecosystem, not for throughput.
 | GGUF **UD-IQ2_M** `unsloth/GLM-4.6-GGUF` | llama.cpp | 135.02 GB | **217.8** | **10.85** @25.8k |
 | GGUF IQ3_XS `bartowski/...` | llama.cpp | 135.57 GB | 195.9 | 8.51 @25.8k |
 | AWQ-Int4 `bullpoint/GLM-4.6-AWQ` | vLLM + `--cpu-offload-gb 70` (**UVA**) | — | — | ✗ **unusable** |
-| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch` | — | ✗ **NCCL crash** | — |
+| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch --enforce-eager` | 131.16 | **695.9** | see below |
+| AWQ-Int4, same weights | vLLM + `--offload-backend prefetch`, graphs on | — | ✗ **NCCL crash** | — |
 
 **vLLM's *UVA* offload is not viable at this tier** — one 28k request ran past
 35 minutes at steady 505% CPU. llama.cpp does the same work at 8.5 t/s.
@@ -113,14 +114,54 @@ The one that was measured is the one that cannot overlap. `--offload-params
 experts` further restricts either backend to the expert stacks, which on GLM-4.6
 is ~168 GB of the 176 GB.
 
-**The prefetch backend does not currently work here either.** At 75% offload it
-crashed during load with `NCCL error: unhandled cuda error` in `ncclAllReduce`
-(worker TP1), then hung with the container still alive. A control run of
-`t35-w8a8` at TP=2 loaded normally on the same GPUs minutes later — 130 s,
-41.88 GiB KV cache — so this is the offloader, not the hardware. Untested
-mitigations: `--enforce-eager` (it joins a private copy stream into CUDA-graph
-captures, the most likely thing to break RCCL) and
-`VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1`. See `docs/29`.
+**The prefetch backend works, but only with `--enforce-eager`.** At 75% offload
+it first crashed during load with `NCCL error: unhandled cuda error` in
+`ncclAllReduce` (worker TP1), then hung with the container still alive. A control
+run of `t35-w8a8` at TP=2 loaded normally on the same GPUs minutes later — 130 s,
+41.88 GiB KV — proving it was the offloader, not the hardware.
+
+`--enforce-eager` fixes it, which also identifies the cause. `PrefetchOffloader`
+splices a private `torch.cuda.Stream` into CUDA-graph captures *by design* — its
+docstring says events "allow the copy stream to join CUDA graph captures" — and
+it patches module forwards to insert `wait_prefetch`/`start_prefetch` ops into
+the captured graph. **RCCL collectives inside that capture are what break.**
+Removing graph capture removes the collision. So the feature is not broken on
+ROCm; it is incompatible with graph capture there, which is a more useful fact.
+
+```bash
+--offload-backend prefetch --offload-params experts \
+--offload-group-size 4 --offload-num-in-group 3 \
+--enforce-eager                     # REQUIRED — without it, NCCL dies at load
+```
+
+**What is and is not accelerated in that result.** Verified from the `.co` load
+lines, not inferred:
+
+| AITER component | State |
+|---|---|
+| ASM flash attention (prefill) | **active** — `fwd_hd128_bf16_rtna_group.co` loaded, matching GLM-4.6's `head_dim=128` |
+| Custom paged attention (decode) | active — `pa_v1` JIT at `head_size=128, gqa_ratio=12` |
+| AITER linear / GEMM | **off** — `VLLM_ROCM_USE_AITER_LINEAR=0` |
+| AITER MoE | **off** — `VLLM_ROCM_USE_AITER_MOE=0` |
+
+So 695.9 t/s is with ASM attention but **stock GEMM and stock MoE**, leaving
+headroom. Note `fmoe` — the highest MACs/instruction kernel on this box
+(`docs/33`) — is doubly unavailable to this arm: disabled by env, *and* all 8
+gfx90a objects are `noquant{Fp16,Bf16}`, so they cannot consume AWQ-Int4 weights.
+
+**`VLLM_PREFER_AITER_FA` is dead on vLLM 0.23.** The startup log says
+`Unknown vLLM environment variable detected: VLLM_PREFER_AITER_FA`. AITER FA is
+still selected, but on backend priority order rather than by the flag:
+
+```
+Found incompatible backend(s) [TURBOQUANT] with AttentionType.DECODER.
+Overriding with ROCM_AITER_FA out of potential backends:
+  ['ROCM_AITER_FA', 'ROCM_ATTN', 'TRITON_ATTN']
+```
+
+The +8% @15k / +33% @101k this doc previously credited to the flag was a real
+measurement, but the flag no longer causes it. Harmless to keep; do not rely on
+it, and do not assume its absence means AITER FA is off — check the `.co` line.
 
 **vLLM has no managed-memory path at all** — zero references to
 `hipMallocManaged`/`cudaMallocManaged` in the package. So the llama.cpp
@@ -266,6 +307,15 @@ not the cost of being bigger.
 > **Choose the largest model that still fits VRAM, not the largest you can
 > page.** Crossing the VRAM line costs far more than the parameters buy.
 
+**Unless you page deliberately, in which case the penalty largely disappears.**
+GLM-4.6 AWQ-Int4 under vLLM's *prefetch* offloader — 75% of expert layers, ~126
+GB of weights resident in host RAM — measures **695.9 t/s prefill** (TTFT 21.92 s
+median over three reps at 15k, VRAM 131.16 GB). Against the ~680 predicted from
+active parameters, that is **on the line**: explicit staged copies recover
+essentially the whole not-fitting penalty for prefill. The row above (196 t/s,
+3.5× below prediction) is what *implicit* placement costs, not what the model
+costs. Decode is the opposite story — see the offload section.
+
 ---
 
 ### I-quants vs K-quants at tier 4 — K-quants own decode, and own CPU offload
@@ -338,7 +388,7 @@ says.
 -e NCCL_P2P_DISABLE=1              # PCIe-only, no XGMI
 -e VLLM_ROCM_USE_AITER=1
 -e VLLM_ROCM_USE_AITER_MHA=1
--e VLLM_PREFER_AITER_FA=1          # +8% @15k, +33% @101k — and it is NOT selected without this
+-e VLLM_PREFER_AITER_FA=1          # DEAD on vLLM 0.23 — see below. Harmless to leave.
   --max-model-len 131072           # never higher on stock vLLM
   --max-num-batched-tokens 8192    # +11% prefill; default is 2048, plateaus at 8192
   --no-enable-prefix-caching       # benchmarking only; leave ON in production
