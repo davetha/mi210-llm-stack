@@ -307,6 +307,38 @@ says.
 llama.cpp: `-ub 2048` (4096 and 8192 are both measurably worse), and if you set
 `-ngl` you must also set `--n-cpu-moe` — `common_fit_params()` is all-or-nothing.
 
+### `GGML_CUDA_FORCE_MMQ` — worth it only when VRAM is the constraint
+
+`ggml_cuda_should_use_mmq()` returns false past `ne11 > 256` for Q4_K/Q5_K, so at
+`-ub 2048` the attention projections and dense layers dequantize to fp16 and call
+hipBLAS instead of using the int8 MFMA kernels. Forcing MMQ on (a compile-time
+`#ifdef`, so it needs a separate build — `configs/Dockerfile.llama-forcemmq`)
+gives opposite answers on the two ends of the matrix:
+
+| Model | Prefill @15k | Prefill @25.8k | Decode |
+|---|---:|---:|---:|
+| Qwen3-30B Q4_K_M, baseline | **3,415.7** | **2,891.3** | 84.87 |
+| Qwen3-30B Q4_K_M, forced | 3,349.8 | 2,866.4 | 85.04 |
+| | **−1.9%** | **−0.9%** | +0.2% |
+| GLM-4.6 IQ3_XS, baseline | 204.5 | 180.6 | 8.62 |
+| GLM-4.6 IQ3_XS, **forced** | **214.3** | **189.5** | 8.64 |
+| | **+4.8%** | **+4.9%** | +0.2% |
+
+**Decode is unmoved in both cases** (+0.2%, noise), which is what the heuristic
+predicts — it keys on `ne11`, and decode never leaves the small-batch branch
+where MMQ already wins.
+
+The prefill split is the interesting part, and it is probably not about the
+arithmetic. The 30B is fully resident, so hipBLAS's fp16 GEMM is simply fast and
+MMQ's int8 path is marginally behind it — upstream's cutoff is correct there.
+GLM-4.6 saturates VRAM, and the dequantize path has to *materialise an fp16 copy
+of the weights* to hand to hipBLAS. MMQ consumes the quantized weights directly.
+When bandwidth and VRAM are the binding constraint, skipping that temporary is
+worth ~5%; when they are not, it costs 1–2%.
+
+> **Rebuild with `-DGGML_CUDA_FORCE_MMQ=ON` only for models that saturate VRAM.**
+> For anything that fits comfortably, upstream's default is the better choice.
+
 **Verify AITER actually ran**, don't assume: the `.co` load line is the proof,
 not the backend-selection line.
 
