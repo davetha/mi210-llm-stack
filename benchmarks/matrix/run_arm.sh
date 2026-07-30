@@ -208,6 +208,59 @@ done
 
 docker logs "$NAME" > "$LOGS/$LABEL.serverlog" 2>&1 || true
 
+# ---------------------------------------------------------------- ASM evidence
+# WHICH KERNEL RAN IS A MEASUREMENT, NOT AN INFERENCE. The `LoadKernel:` line
+# from AITER's C++ runtime is the only direct proof that an ASM code object
+# executed rather than a CK or Triton fallback. docs/14 and docs/16 both
+# published gfx90a "ASM" throughput that was actually the fallback because
+# nothing checked, and docs/19 had to retract every ASM figure predating the
+# port matrix for the same reason. A fast number with no proof of ASM is
+# probably the fallback.
+#
+# So record it per arm, at measurement time, beside the result. Attribution
+# cannot be reconstructed later from a container that has been torn down.
+#
+# Harvested from `docker logs` rather than in-process because the runtime writes
+# the line straight to fd 1, which is why contextlib.redirect_stdout cannot see
+# it (docs/17). Needs AITER_LOG_LEVEL=info, which serve_vllm_aiter.sh sets. On
+# stock-vLLM arms no objects appear and "any_asm": false is the correct answer,
+# not a failure.
+python3 - "$LOGS/$LABEL.serverlog" "$RESULTS/$LABEL-asm.json" "$LABEL" <<'ASMPY' || true
+import collections, json, os, re, sys
+logfile, out, label = sys.argv[1:4]
+objs = collections.Counter()
+readable = True
+try:
+    with open(logfile, errors="replace") as fh:
+        for line in fh:
+            if "LoadKernel" not in line:
+                continue
+            for m in re.findall(r"[\w./+-]+\.co\b", line):
+                objs[os.path.basename(m)] += 1
+except OSError:
+    # A missing serverlog must still leave a verdict on disk. Writing nothing
+    # would make "the check never ran" indistinguishable from "no ASM loaded",
+    # which is the ambiguity this whole block exists to remove.
+    readable = False
+# Family = leading token of the object name (fmha, pa, fmoe, mla, ...), which is
+# how the port matrix in docs/19 is indexed.
+fams = collections.Counter()
+for co, n in objs.items():
+    fams[co.split("_")[0]] += n
+json.dump({"label": label, "serverlog_readable": readable,
+           "any_asm": bool(objs), "distinct_objects": len(objs),
+           "families": dict(sorted(fams.items())),
+           "objects": dict(sorted(objs.items()))},
+          open(out, "w"), indent=2)
+if objs:
+    print("  ASM: %d distinct code objects loaded -- %s"
+          % (len(objs), ", ".join("%s x%d" % (k, v) for k, v in sorted(fams.items()))))
+elif not readable:
+    print("  ASM: serverlog unreadable -- attribution UNKNOWN, not proven absent")
+else:
+    print("  ASM: none loaded -- this arm's numbers are NOT ASM-attributable")
+ASMPY
+
 # Harvest the engine's own footprint accounting before tearing the container
 # down. Sampling rocm-smi does NOT give model size: vLLM preallocates KV cache
 # to --gpu-memory-utilization, so a 16 GB model and a 60 GB model both report
