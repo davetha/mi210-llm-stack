@@ -203,7 +203,7 @@ manual diagnostic is bench work; it should either take a claim or use the
 |---|---|
 | Fail-fast on crashed-but-alive containers | **done** — `run_arm.sh` scans for worker-fatal patterns |
 | Make diagnostics visible to the FIFO | **done** — the check now matches `^(bench\|probe)-` |
-| Re-run round 17 (MMQ A/B) on clean GPUs | **running** (01:39) |
+| Re-run round 17 (MMQ A/B) on clean GPUs | **done** — see below, and `docs/28` |
 | UVM isolation probe (1-GPU / 2-GPU / oversubscribed) | designed, not run |
 | vLLM prefetch retry with `--enforce-eager` | not started |
 
@@ -228,3 +228,21 @@ of 195.9 is ~+12% prefill with decode essentially unchanged (8.57 vs 8.51) —
 a modest, mechanically plausible result, and the one the re-run should confirm
 or refute. The lesson is that a contaminated control can manufacture a headline
 number, and headline numbers are exactly what nobody re-checks.
+
+### The clean re-run, for calibration
+
+| estimate | prefill effect | decode effect |
+|---|---:|---:|
+| contaminated A/B | **+65%** | **5.8×** |
+| vs. historical baseline (my guess) | +12% | ~0 |
+| **clean matched A/B** | **+4.8%** | **+0.2%** |
+
+Both guesses were high; the contaminated one was high by more than an order of
+magnitude. Worth noting that the *treatment* arm was reproducible across both
+runs (189.2 then 189.5 t/s at longctx) — the entire spurious effect came from
+the degraded baseline, which is the harder failure to spot, because a broken
+control looks like a working experiment.
+
+The clean result also reverses sign by model: forcing MMQ **costs** 1–2% on
+Qwen3-30B, which fits VRAM comfortably, and **gains** ~5% on GLM-4.6, which does
+not. See `docs/28` for the mechanism.
