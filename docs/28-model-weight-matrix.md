@@ -149,9 +149,35 @@ headroom. Note `fmoe` — the highest MACs/instruction kernel on this box
 (`docs/33`) — is doubly unavailable to this arm: disabled by env, *and* all 8
 gfx90a objects are `noquant{Fp16,Bf16}`, so they cannot consume AWQ-Int4 weights.
 
-**`VLLM_PREFER_AITER_FA` is dead on vLLM 0.23.** The startup log says
-`Unknown vLLM environment variable detected: VLLM_PREFER_AITER_FA`. AITER FA is
-still selected, but on backend priority order rather than by the flag:
+> ### ~~`VLLM_PREFER_AITER_FA` is dead on vLLM 0.23~~ — **retracted 2026-07-31**
+>
+> This section previously read: *"the startup log says `Unknown vLLM
+> environment variable detected: VLLM_PREFER_AITER_FA`. AITER FA is still
+> selected, but on backend priority order rather than by the flag."*
+>
+> **Backwards on both counts.** That flag is the *only* thing that selects
+> AITER FA on this box, and backend priority order is precisely what would
+> prevent it.
+>
+> `_get_backend_priorities()` in `platforms/rocm.py` is a plain ordered list
+> whose first valid entry wins, and it appends `ROCM_ATTN`
+> **unconditionally, first**. `ROCM_AITER_FA` can only ever be second, so it
+> is reached only when `ROCM_ATTN` is invalid — which it essentially never
+> is. `configs/prefer_aiter_fa_gfx90a.py` is what moves it ahead, gated on
+> `VLLM_PREFER_AITER_FA=1`, which our patched `rocm.py` reads from
+> `os.environ` **directly**. That is why the flag works despite vLLM's own
+> envs registry not knowing the name: the `Unknown vLLM environment
+> variable` warning is expected and does not mean the flag is inert.
+>
+> The log quoted below shows `['ROCM_AITER_FA', 'ROCM_ATTN', ...]` — AITER
+> *first*. That ordering does not occur upstream; it is the patch.
+>
+> **How this was caught.** Round 32 built an image without that patch and
+> measured the difference: `['ROCM_ATTN', 'ROCM_AITER_FA', 'TRITON_ATTN']`,
+> `ROCM_ATTN` selected, and **zero `LoadKernel` lines** — AITER admitted and
+> never used, while `is_aiter_attention_supported()` answered `True`
+> throughout. Candidacy is not selection, and only the `.co` load line
+> distinguishes them.
 
 ```
 Found incompatible backend(s) [TURBOQUANT] with AttentionType.DECODER.
@@ -159,9 +185,10 @@ Overriding with ROCM_AITER_FA out of potential backends:
   ['ROCM_AITER_FA', 'ROCM_ATTN', 'TRITON_ATTN']
 ```
 
-The +8% @15k / +33% @101k this doc previously credited to the flag was a real
-measurement, but the flag no longer causes it. Harmless to keep; do not rely on
-it, and do not assume its absence means AITER FA is off — check the `.co` line.
+**Set `VLLM_PREFER_AITER_FA=1` and verify the `.co` line.** Its absence does
+mean AITER FA is off. The +8% @15k / +33% @101k this doc once credited to the
+flag was a real measurement, and the flag does cause it — but on a build
+carrying `prefer_aiter_fa_gfx90a.py`, which not every image here has.
 
 **vLLM has no managed-memory path at all** — zero references to
 `hipMallocManaged`/`cudaMallocManaged` in the package. So the llama.cpp
@@ -507,7 +534,7 @@ says.
 -e NCCL_P2P_DISABLE=1              # PCIe-only, no XGMI
 -e VLLM_ROCM_USE_AITER=1
 -e VLLM_ROCM_USE_AITER_MHA=1
--e VLLM_PREFER_AITER_FA=1          # DEAD on vLLM 0.23 — see below. Harmless to leave.
+-e VLLM_PREFER_AITER_FA=1          # REQUIRED to select AITER FA — see the retraction above.
   --max-model-len 131072           # never higher on stock vLLM
   --max-num-batched-tokens 8192    # +11% prefill; default is 2048, plateaus at 8192
   --no-enable-prefix-caching       # benchmarking only; leave ON in production
