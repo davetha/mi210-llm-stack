@@ -32,8 +32,38 @@
 > The ACS worry is also settled, and negatively: `ACSCtl` does read
 > `ReqRedir+ CmpltRedir+`, so peer traffic is redirected through the root
 > complex — **but that redirect is already inside the 26.98 GB/s**, so it is not
-> erasing the benefit. `pcie_acs_override=downstream` is now worth evaluating,
-> on the condition stated below: plain P2P showed a gain first.
+> erasing the benefit.
+>
+> **And removing the redirect buys nothing — measured, round 35.** The
+> precondition stated below was met (plain P2P showed a gain), so the lever was
+> pulled. `pcie_acs_override` is not in this kernel, but the bits are writable
+> at runtime, which is better anyway — no reboot and instantly reversible:
+>
+> ```
+> sudo setpci -s 0000:86:00.0 ECAP_ACS+6.w=0011   # 0x001d, ReqRedir+CmpltRedir cleared
+> sudo setpci -s 0000:c2:00.0 ECAP_ACS+6.w=0011
+> ```
+>
+> Confirmed `ReqRedir- CmpltRedir-` on both bridges, then measured twice:
+>
+> | | redirect ON | redirect OFF |
+> |---|---:|---:|
+> | peer copy, 512 MiB | 26.98 GB/s | 26.99 GB/s |
+> | cold-16k prefill | 8,087.99 | 8,112.71 |
+> | longctx prefill | 6,761.24 | 6,755.10 |
+> | longctx decode | 55.18 | 55.37 |
+> | longctx TTFT | 3.80 s | 3.81 s |
+>
+> Everything inside 0.4%. **The root-complex redirect costs nothing measurable
+> on this box**, at bulk-transfer sizes or in serving. The bandwidth null was
+> expected — 512 MiB is bandwidth-bound and a redirect costs latency — which is
+> why round 35 measured serving instead of stopping there.
+>
+> Incidentally, the redirect-ON arm reproduces round 31's P2P numbers across
+> sessions to within 0.8% (8,093.0 → 8,087.99 prefill, 54.76 → 55.18 decode),
+> which corroborates both rounds.
+>
+> Restored to `0x001d` afterwards, by a trap that fires on any exit path.
 >
 > **Gate 1 is open**: `NCCL_P2P_DISABLE` now defaults to `0`. Gates 2 and 3 are
 > untouched. The RCCL setup stall remains real and unexplained; it did not recur
