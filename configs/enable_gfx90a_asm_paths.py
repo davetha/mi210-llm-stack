@@ -313,7 +313,7 @@ def expand(text):
     return text.replace("{MARK}", MARK)
 
 
-def apply(revert=False, check=False):
+def apply(revert=False, check=False, assert_patched=False):
     ok = True
     for path, old, new, count in PATCHES:
         new = expand(new)
@@ -331,7 +331,15 @@ def apply(revert=False, check=False):
             state = "patched" if already else ("clean" if have else "UNKNOWN")
             print(f"{state:>8}  {os.path.basename(path)}  "
                   f"(want {count}, found {have} unpatched / {already} patched)")
-            ok = ok and (already == count or have == count)
+            # --check answers "is this tree in a state I recognise?", so a clean
+            # tree passes. That is the right question when deciding whether to
+            # apply, and the wrong one when gating a build: an image where none
+            # of the patches landed is exactly what --check would wave through.
+            # --assert-patched demands the patched state specifically.
+            if assert_patched:
+                ok = ok and already == count
+            else:
+                ok = ok and (already == count or have == count)
             continue
 
         if have == 0 and already >= count:
@@ -354,9 +362,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--revert", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--assert-patched", action="store_true",
+                    help="like --check, but exit nonzero unless every site is "
+                         "PATCHED. Use this to gate a build; --check alone "
+                         "passes a stock tree.")
     args = ap.parse_args()
-    ok = apply(revert=args.revert, check=args.check)
-    if not args.check and ok and not args.revert:
+    check = args.check or args.assert_patched
+    ok = apply(revert=args.revert, check=check, assert_patched=args.assert_patched)
+    if not check and ok and not args.revert:
         print("\nNow rebuild the JIT module so it picks up the new C++:\n"
               "  rm -f  {0}/aiter/jit/module_fmha_v3_fwd.so\n"
               "  rm -rf {0}/aiter/jit/build/module_fmha_v3_fwd\n"

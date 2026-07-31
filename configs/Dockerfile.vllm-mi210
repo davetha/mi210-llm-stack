@@ -1,0 +1,216 @@
+# vLLM for 2x MI210 (gfx90a / CDNA2), with the AITER ASM and 256k paged-attention
+# patches this repo validated. Build from the repo root:
+#
+#   docker build -f configs/Dockerfile.vllm-mi210 -t vllm-mi210:latest .
+#
+# then, ON A MACHINE WITH THE CARDS, run the verification that the build cannot
+# do (see "WHAT THE BUILD CANNOT PROVE" below):
+#
+#   docker run --rm --device /dev/kfd --device /dev/dri --security-opt seccomp=unconfined \
+#     --entrypoint /usr/local/bin/verify-gfx90a vllm-mi210:latest
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FIXES
+#
+# Stock rocm/vllm cannot reach AITER on an MI210 and says nothing about it. The
+# engine logs a perfectly ordinary
+#
+#   Overriding with ROCM_ATTN out of potential backends: ['ROCM_ATTN','TRITON_ATTN']
+#
+# and serves from the generic ROCm path. AITER never enters the candidate list,
+# so VLLM_ROCM_USE_AITER=1 has no effect whatsoever. Four things are broken, at
+# four layers, and all four must be fixed or the stack quietly stays slow:
+#
+#   1. The image ships amd-aiter 0.1.13, whose gates are spelled differently
+#      (`get_gfx() == "gfx942"` rather than the tuple form) so this repo's
+#      patches refuse to apply. We install v0.1.19 from source.
+#   2. AITER ships NO gfx90a code objects -- only gfx942, gfx950, gfx1250.
+#      repatch_gfx942_to_gfx90a.py disassembles each gfx942 kernel, substitutes
+#      CDNA2 mnemonics and RE-ASSEMBLES for gfx90a, emitting only those that
+#      genuinely translate. Portability is proven by the assembler, not assumed.
+#   3. AITER's own dispatch refuses gfx90a in five places, one of them a negated
+#      arch test in mha_fwd.cu that returns -1 before kernel lookup.
+#   4. vLLM gates AITER behind on_mi3xx() = gfx942|gfx950. We widen ONLY the two
+#      attention checks, so AITER's GEMM/MoE/FP8 paths stay unreachable on a
+#      chip with no FP8 ALU.
+#
+# Separately, vLLM's ROCm custom paged attention has an eight-entry reduction
+# dispatch table = 8 * 64 * 256 = exactly 128K, and exceeding it drops decode to
+# the Triton fallback for EVERY request -- 0.75 t/s against 16.0. Cases 9..16
+# are added and _rocm_C rebuilt. Validated in production at 150k context
+# (npar_loops: 10, a value stock vLLM cannot produce). See
+# docs/36-depth-curves-and-256k-validation.md.
+#
+# ---------------------------------------------------------------------------
+# WHY A DOCKERFILE AND NOT A FORK
+#
+# The diff against upstream is four small edits. Every one of the patch scripts
+# asserts on its expected match count, so an upstream change that moves the code
+# fails THIS BUILD loudly rather than silently leaving the fast path disabled --
+# which is strictly better behaviour than a fork, where the same upstream change
+# is a merge conflict at best and a silent semantic drift at worst. The 242
+# gfx90a .co files are generated artifacts, regenerated deterministically here,
+# and do not belong in source control at all.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE BUILD CANNOT PROVE
+#
+# `import aiter` calls get_gfx_runtime(), which shells out to rocminfo and --
+# unlike the codegen path -- does NOT honour GPU_ARCHS. So it needs a real card,
+# and `docker build` cannot attach one portably. Everything verified below is
+# therefore file-level: the patches applied, the code objects exist, the rebuilt
+# extension is installed. That the ASM kernels actually LOAD AND RUN is checked
+# by verify-gfx90a, which needs the GPU. Run it. A half-patched image fails by
+# being slow rather than by erroring, which is exactly the failure mode this
+# repo has already published bad numbers from twice.
+
+FROM rocm/vllm:rocm7.14.0_cdna_ubuntu24.04_py3.14_pytorch_2.11.0_vllm_0.23.0
+
+ARG AITER_TAG=v0.1.19
+ARG BUILD_JOBS=20
+
+# GPU_ARCHS is what lets every build step below run on a machine with no MI210
+# in it. aiter's get_gfx_custom_op_core() reads it in preference to rocminfo,
+# and the vLLM extension rebuild takes the arch explicitly.
+ENV GPU_ARCHS=gfx90a \
+    PYTORCH_ROCM_ARCH=gfx90a \
+    VLLM_TARGET_DEVICE=rocm \
+    SITE=/opt/python/lib/python3.14/site-packages
+
+COPY configs/repatch_gfx942_to_gfx90a.py \
+     configs/enable_gfx90a_asm_paths.py \
+     configs/enable_vllm_aiter_gfx90a.py \
+     configs/extend_rocm_pa_256k_gfx9.py \
+     /opt/mi210/
+
+# --- 1. AITER v0.1.19 from source ------------------------------------------
+#
+# --recursive is required: aiter vendors Composable Kernel as a submodule and a
+# non-recursive clone builds into confusing missing-header errors much later.
+# PREBUILD_KERNELS is left off so the huge AOT kernel build is skipped and
+# AITER's JIT compiles what is actually used at runtime.
+#
+# The triton pin is not cosmetic. Installing aiter drags triton DOWN from the
+# 3.7.1 this image ships to 3.7.0, and 3.7.0 SEGFAULTS on import against this
+# image's torch -- `import aiter` dies with SIGSEGV inside triton/knobs.py
+# loading a native module. amd-aiter does not even declare triton as a
+# dependency, so this is a transitive downgrade, not an intentional pin.
+RUN --mount=type=cache,target=/ccache,sharing=locked \
+    set -eux; \
+    export CCACHE_DIR=/ccache CCACHE_MAXSIZE=100G CCACHE_DEPEND=1; \
+    export CCACHE_SLOPPINESS=locale,time_macros,include_file_ctime,include_file_mtime; \
+    git clone --recursive --depth 1 --branch "${AITER_TAG}" \
+        https://github.com/ROCm/aiter.git /src/aiter; \
+    cd /src/aiter; \
+    python3 -m pip uninstall -y amd-aiter aiter 2>/dev/null || true; \
+    python3 -m pip install --no-build-isolation .; \
+    python3 -m pip install --quiet 'triton==3.7.1'; \
+    python3 -c 'import triton; assert triton.__version__ == "3.7.1", triton.__version__'
+
+# --- 2. translate the gfx942 ASM to gfx90a ---------------------------------
+#
+# Expect 242 OK / 1180 NOTPORT against aiter 0.1.19. The count is asserted
+# because a repatcher that silently emitted nothing would leave every later
+# step "succeeding" on an image whose ASM paths are open but empty.
+RUN set -eux; \
+    HSA="$(ls -d ${SITE}/aiter_meta/hsa 2>/dev/null || ls -d ${SITE}/aiter/hsa)"; \
+    echo "hsa root: ${HSA}"; \
+    python3 /opt/mi210/repatch_gfx942_to_gfx90a.py "${HSA}/gfx942" /tmp/gfx90a; \
+    rm -rf "${HSA}/gfx90a"; \
+    cp -r /tmp/gfx90a "${HSA}/gfx90a"; \
+    n="$(find "${HSA}/gfx90a" -name '*.co' | wc -l)"; \
+    echo "installed ${n} gfx90a code objects"; \
+    [ "${n}" -ge 200 ] || { echo "FATAL: only ${n} code objects, expected ~242" >&2; exit 1; }; \
+    ls "${HSA}/gfx90a" | grep -q 'fmha_v3_fwd' \
+      || { echo "FATAL: no fmha_v3_fwd objects -- the one family proven to run" >&2; exit 1; }
+
+# --- 3. open AITER's own gfx90a dispatch -----------------------------------
+RUN python3 /opt/mi210/enable_gfx90a_asm_paths.py
+
+# --- 4. let vLLM route attention to AITER ----------------------------------
+RUN python3 /opt/mi210/enable_vllm_aiter_gfx90a.py
+
+# --- 5. extend ROCm paged attention to 256k, and rebuild _rocm_C -----------
+#
+# This is the only step that compiles vLLM itself. It edits csrc/rocm/attention.cu
+# in the source tree the image already carries at /app/vllm, so there is no clone
+# and no version drift between the source and the installed wheel.
+#
+# The stock .so is kept beside the new one. Not for rollback convenience -- for
+# attribution: if a long-context result later looks wrong, the two can be A/Bed
+# in the same image rather than across two builds hours apart, which is a
+# mistake this project has already made once.
+RUN --mount=type=cache,target=/ccache,sharing=locked \
+    set -eux; \
+    export CCACHE_DIR=/ccache CCACHE_MAXSIZE=100G CCACHE_DEPEND=1; \
+    python3 /opt/mi210/extend_rocm_pa_256k_gfx9.py --vllm-src /app/vllm; \
+    cd /app/vllm; \
+    cmake -S . -B /tmp/pabuild -DVLLM_TARGET_DEVICE=rocm \
+          -DVLLM_PYTHON_EXECUTABLE="$(which python3)" \
+          -DCMAKE_BUILD_TYPE=Release -DVLLM_GPU_ARCHES=gfx90a > /tmp/cmake.log 2>&1 \
+      || { echo '--- cmake configure failed ---'; tail -40 /tmp/cmake.log; exit 1; }; \
+    cmake --build /tmp/pabuild --target _rocm_C -j "${BUILD_JOBS}"; \
+    SO="$(find /tmp/pabuild -name '_rocm_C*.so' | head -1)"; \
+    [ -n "${SO}" ] || { echo 'FATAL: no _rocm_C .so produced' >&2; exit 1; }; \
+    cp -v "${SITE}/vllm/_rocm_C.abi3.so" "${SITE}/vllm/_rocm_C.abi3.so.stock"; \
+    cp -v "${SO}" "${SITE}/vllm/_rocm_C.abi3.so"; \
+    rm -rf /tmp/pabuild
+
+# --- 6. verify everything the build is able to verify ----------------------
+#
+# Each --check writes nothing and reports PATCHED/stock per file. A build that
+# reached here with any of them stock would produce an image that serves
+# correctly and slowly, so this is a hard gate rather than a report.
+RUN set -eux; \
+    python3 /opt/mi210/enable_vllm_aiter_gfx90a.py --check; \
+    python3 /opt/mi210/enable_gfx90a_asm_paths.py --assert-patched; \
+    python3 /opt/mi210/extend_rocm_pa_256k_gfx9.py --vllm-src /app/vllm --check; \
+    python3 - <<'PY'
+import pathlib, sys
+site = pathlib.Path("/opt/python/lib/python3.14/site-packages")
+bad = []
+# The two attention checks must be keyed on on_gfx9(), not on_mi3xx().
+aiter_ops = (site / "vllm/_aiter_ops.py").read_text()
+if "is_aiter_attention_supported" not in aiter_ops:
+    bad.append("vllm/_aiter_ops.py: is_aiter_attention_supported missing")
+# The gfx9 gate must admit 256k.
+rocm_py = (site / "vllm/platforms/rocm.py").read_text()
+if "PATCHED (mi210-llm-stack)" not in rocm_py:
+    bad.append("vllm/platforms/rocm.py: 256k gate not applied")
+# And the rebuilt extension must be the one installed.
+so = site / "vllm/_rocm_C.abi3.so"
+stock = site / "vllm/_rocm_C.abi3.so.stock"
+if not stock.is_file():
+    bad.append("_rocm_C.abi3.so.stock missing -- extension was never rebuilt")
+elif so.read_bytes() == stock.read_bytes():
+    bad.append("_rocm_C.abi3.so is byte-identical to stock -- rebuild did not take")
+# Step 3 rewrote mha_fwd.cu, so any fmha JIT module built BEFORE that rewrite
+# now has a kernarg layout that disagrees with the .co files installed in step
+# 2. Such a module does not error: it runs at full speed and discards every
+# store. That is precisely how pa_fwd_asm looked broken for weeks
+# (docs/18-pa-fwd-asm-resolved.md). aiter is installed from source in this same
+# build so none should exist -- assert it rather than assume it, and let the
+# first runtime call JIT-build against the patched source.
+stale = list((site / "aiter/jit").glob("module_fmha_v3_fwd*.so"))
+if stale:
+    bad.append(f"pre-built fmha JIT module(s) present, layout predates the patch: {stale}")
+if bad:
+    print("FATAL: image is half-patched:", *bad, sep="\n  ", file=sys.stderr)
+    sys.exit(1)
+print("build-time verification passed (file level; run verify-gfx90a on a card)")
+PY
+
+COPY configs/verify_gfx90a_image.sh /usr/local/bin/verify-gfx90a
+RUN chmod +x /usr/local/bin/verify-gfx90a
+
+# The base image has no ENTRYPOINT and CMD=/bin/bash. Keep it that way: the
+# serve scripts pass `vllm serve ...` as the command, and an image that
+# hardcodes an entrypoint of `sleep infinity` -- which is what
+# committing-from-a-builder-container produces -- silently breaks them.
+WORKDIR /app
+CMD ["/bin/bash"]
+
+LABEL org.opencontainers.image.title="vllm-mi210" \
+      org.opencontainers.image.description="vLLM 0.23 + AITER ASM flash attention + 256k paged attention for gfx90a (MI210/CDNA2)" \
+      org.opencontainers.image.source="https://github.com/davetha/mi210-llm-stack" \
+      org.opencontainers.image.licenses="MIT"
