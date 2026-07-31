@@ -1,0 +1,96 @@
+{
+  "label": "rd32-awq256k-patched",
+  "tier": "35B",
+  "quant": "awq256k",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 222822,
+  "actual_prompt_tokens": 205468,
+  "ttft_s_median": 400.4923736799974,
+  "ttft_s_min": 400.181186515023,
+  "ttft_s_max": 400.57735152100213,
+  "implied_prefill_tps_median": 512.9296482185848,
+  "decode_tps_median": 11.616359657310074,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "'s exactly that\u2014no punctuation, no spaces, just the word. \n\nThis satisfies the request perfectly.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      11571200,
+      65245388800
+    ],
+    "total_gb": 65.26
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      11558912,
+      65245376512
+    ],
+    "total_gb": 65.26
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 400.57735152100213,
+      "total_s": 422.7276394190267,
+      "stream_tokens": 256,
+      "decode_tps": 11.512265623905792,
+      "text": "<think>\nOkay, I need to count from 1 to 60, one number per line, and nothing else. The user provided a long string of text that's supposed to be padding, but I should ignore that and just output the n ...[snip]... er line, and nothing else.\" So I need to make sure there's no extra text, just the numbers.\n\nI'll start writing them out. Let's see, 1 to 60. I'll make sure I don't miss any numbers. Let's count a few to check:\n\n1\n2\n3\n...\n59\n60\n\nYes, that's 60 numbers. I'll make sure each is on a new line. No commas",
+      "usage": {
+        "prompt_tokens": 205468,
+        "total_tokens": 205724,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "688bb2c74d9948be9bcb3a63169ae5f2",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785482596.8056428,
+      "actual_prompt_tokens": 205468,
+      "implied_prefill_tps": 512.9296482185848
+    },
+    {
+      "ttft_s": 400.181186515023,
+      "total_s": 422.05856112006586,
+      "stream_tokens": 256,
+      "decode_tps": 11.655877300585358,
+      "text": "<think>\nOkay, I need to count from 1 to 60, one number per line, and nothing else. Let me make sure I understand the instructions correctly.\n\nThe user provided a very long string of text that seems to ...[snip]... last few numbers.\n\n1\n2\n3\n...\n58\n59\n60\n\nYes, that's correct. I'll generate each number on a separate line. I'll make sure there are exactly 60 lines, each with a number from 1 to 60.\n\nWait, the user said \"Count from 1 to 60, one number per line, and nothing else.\" So I need to output exactly 60 lines",
+      "usage": {
+        "prompt_tokens": 205291,
+        "total_tokens": 205547,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "3134a4891d0d4664b24fb97233524220",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785483019.5578294,
+      "actual_prompt_tokens": 205291,
+      "implied_prefill_tps": 512.9951305002022
+    },
+    {
+      "ttft_s": 400.4923736799974,
+      "total_s": 422.44417293195147,
+      "stream_tokens": 256,
+      "decode_tps": 11.616359657310074,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else.\n\nI'll generate a simple list of numbers from 1 to 60, one per line.\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI need to make sure I have exactly 60 numbers, one per line, with no other text.\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n",
+      "usage": {
+        "prompt_tokens": 205361,
+        "total_tokens": 205617,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "89ab0c1dbc1b4c64be70a1a8c67f5e91",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785483441.6409695,
+      "actual_prompt_tokens": 205361,
+      "implied_prefill_tps": 512.7713122549698
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 15.73,
+    "load_seconds": 115.049524,
+    "kv_cache_gib": 40.78,
+    "kv_cache_tokens": 445456.0,
+    "graph_capture_gib": 6.05
+  }
+}
