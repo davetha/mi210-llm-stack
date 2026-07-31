@@ -164,3 +164,53 @@ The metric costs a disassembly and no GPU time:
 Both pathologies this repo has found — the FP8 `v_cmp`/`v_cndmask` emulation
 (`docs/21`) and the W8A16 expert dequant (`docs/24`) — would have been caught by
 that one number without touching a GPU.
+## CORRECTION: the shipping MoE kernel, measured
+
+Added after the framing points above. It answers the open question this document
+raises — that the path which actually ships had never been counted — and it
+resolves it against the original framing rather than for it.
+
+The caveat below — that this cache is FP8-blockscale-dominated and the shipping
+int8/W8A16 path was never counted — was stated and then *reasoned past*. The
+Triton medians were used as "the vLLM baseline" despite being the known-bad,
+non-served arm. Corrected by measuring the real thing.
+
+`fused_moe_kernel`, 14 variants, from the host cache at
+`/mnt/llm-storage/bench-results/vllm-opt/cache/triton/cache`:
+
+| tile | total ins | MFMA | MACs/ins | `v_cmp`+`v_cndmask` | share |
+|---|---:|---:|---:|---:|---:|
+| `32x32x8bf16_1k` | 792–811 | 48 | **485–497** | 110–112 | 14% |
+| `32x32x8bf16_1k` | 599–609 | 24 | 323–328 | 65–66 | 11% |
+| `16x16x16bf16_1k` | 501–514 | 24 | **191–196** | 48–53 | 10% |
+
+**median 195.1 · best 496.5**
+
+Three consequences, all against the original framing:
+
+1. **The vLLM baseline is 195/496, not 39–85.** Headroom against AITER `fmoe`
+   (1,058) is ~5.4× on median and ~2.1× on the best variants — not 6–13×.
+2. **The FP8 dequant pathology does not generalize.** `v_cmp`/`v_cndmask` is
+   **10–14%** here against **48.5%** in the FP8 kernel. There is no software
+   emulation in the shipping MoE path, so the `docs/30` Lead A prediction is
+   **unsupported** — treat the bit-trick idea as "check", not "expect".
+3. **Static issue efficiency does not measure an issue-bound path.** It is
+   consistent with one. A kernel far off peak issue efficiency need not be
+   proportionally slow end-to-end if it stalls on memory regardless.
+   `rocprofv3 --kernel-trace` remains the only thing that settles it.
+
+### The lead this replaces it with: untuned tile selection at decode shapes
+
+All 14 are `bf16_1k`, confirming `docs/24`'s W8A16-experts→bf16-GEMM. And the
+split is by shape: **decode-shape variants select `16x16x16` (191–196 MACs/ins);
+larger shapes select `32x32x8` (485–497).** Fixed per-kernel overhead is ~450–500
+instructions either way, so the large tiles amortize it over 4× the MACs and the
+small ones do not. **Decode sits on the wrong side of a 2.5× spread.**
+
+vLLM ships tuned `fused_moe` configs for MI300X/MI308X/MI325X/MI350X/MI355X and
+**none for MI210**, so this selection comes from fallback heuristics. That is
+**backlog item 4**, which `docs/25` deprioritized with "no conclusion now rests on
+it" — one does now. It also re-points at item **3b**, since `benchmark_moe.py` is
+the blocked route to fixing it (the `int8_w8a16` dtype crash on torch 2.11's
+stable ABI).
+
