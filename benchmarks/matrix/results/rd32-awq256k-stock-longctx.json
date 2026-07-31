@@ -1,0 +1,96 @@
+{
+  "label": "rd32-awq256k-stock",
+  "tier": "35B",
+  "quant": "awq256k",
+  "engine": "vllm",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 222822,
+  "actual_prompt_tokens": 205397,
+  "ttft_s_median": 398.4233781209914,
+  "ttft_s_min": 398.31103354797233,
+  "ttft_s_max": 399.8045804119902,
+  "implied_prefill_tps_median": 515.5244678880915,
+  "decode_tps_median": 0.8877883990959655,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "NOWLEDGED\" as instructed.\n\nThis is a simple task, so I'll respond with that one word immediately.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      11612160,
+      62690185216
+    ],
+    "total_gb": 62.7
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      11624448,
+      62690197504
+    ],
+    "total_gb": 62.7
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 398.4233781209914,
+      "total_s": 685.2978660180233,
+      "stream_tokens": 256,
+      "decode_tps": 0.8888904754379399,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else.\n\nI'll start counting from 1 and go up to 60, one number per line.\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI need to make sure I have exactly 60 numbers, one per line. Let me double-check the count.\n\n1 to 10: 10 numbers\n11 to 20:",
+      "usage": {
+        "prompt_tokens": 205397,
+        "total_tokens": 205653,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "9427e1e5c27340c192f0c018418acfea",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785479794.2499962,
+      "actual_prompt_tokens": 205397,
+      "implied_prefill_tps": 515.5244678880915
+    },
+    {
+      "ttft_s": 398.31103354797233,
+      "total_s": 685.9712024939945,
+      "stream_tokens": 256,
+      "decode_tps": 0.886462666370008,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The user has provided a long string of text that appears to be random words and phrases, but it's just padding that I should ignore.\n\nI'll simply generate a list of numbers from 1 to 60, one per line.\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n",
+      "usage": {
+        "prompt_tokens": 205439,
+        "total_tokens": 205695,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "e54ee4e96e6d40498f350ec33ff7eda4",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785480479.572675,
+      "actual_prompt_tokens": 205439,
+      "implied_prefill_tps": 515.775318022309
+    },
+    {
+      "ttft_s": 399.8045804119902,
+      "total_s": 687.0351860559313,
+      "stream_tokens": 256,
+      "decode_tps": 0.8877883990959655,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else.\n\nI'll start counting:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI need to make sure I have exactly 60 numbers, one per line. Let me double-check the count.\n\n1 to 10: 10 numbers\n11 to 20: 10 numbers\n21 to 30: 10",
+      "usage": {
+        "prompt_tokens": 205774,
+        "total_tokens": 206030,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "232b09c3df08476eba2457cf73f9a258",
+      "target_prompt_tokens": 222822,
+      "wall_start": 1785481165.5680392,
+      "actual_prompt_tokens": 205774,
+      "implied_prefill_tps": 514.6864495348058
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 15.73,
+    "load_seconds": 115.122527,
+    "kv_cache_gib": 40.42,
+    "kv_cache_tokens": 441536.0,
+    "graph_capture_gib": 5.15
+  }
+}

@@ -108,18 +108,31 @@ exactly 128K. Above it, the kernel is rejected at *CUDA-graph capture time*
 against the **configured** max, so a 256k server bakes the Triton fallback into
 every request — including short ones.
 
-Same model, same cards, same **~110k served context**. Only `--max-model-len`
-differs:
+**Measured in one session, round 32.** Stock `rocm/vllm` against `vllm-mi210`,
+same box, same AWQ-Int4 checkpoint, both at `--max-model-len 262144`, prompt
+**205,291 tokens**, 3 reps per arm:
 
-| `--max-model-len` | prefill t/s | decode t/s |
-|---|---:|---:|
-| 128k | 923.9 | **17.18** |
-| 256k | 996.6 | **1.73** |
+| metric | stock | patched | factor |
+|---|---:|---:|---:|
+| prefill @16k | 2,661.1 | 2,636.8 | 0.99× |
+| prefill @205k | 515.5 | 512.9 | 0.99× |
+| TTFT @205k | 398.4 s | 400.5 s | 1.01× |
+| **decode @205k** | **0.89** | **11.62** | **13.08×** |
 
-**9.9× decode, paid for a configuration value the request never reached.**
-Prefill is untouched, which is the signature of a decode-path fallback rather
-than a memory effect. (`benchmarks/matrix/results/t35-awq-{128,256}kcfg-ctx110k.json`;
-`docs/23` separately measures 0.7485 t/s at 241k over two reps.)
+**Four control metrics inside 1%, one metric 13×.** That isolation is the whole
+value of the round: it establishes the two images are otherwise
+indistinguishable, so the decode result cannot be attributed to anything else.
+And it matches the mechanism exactly — the patch adds cases 9–16 to the
+*reduction* dispatch, which only the decode path uses. Prefill never touches it,
+and prefill did not move. Both arms passed the `ACKNOWLEDGED` correctness probe.
+
+At 205,291 tokens, `npar_loops = ceil(ceil(205291/256)/64) = 13` — a case that
+exists only because of this patch.
+
+> Earlier revisions of this section cited **17.18 vs 1.73 t/s (9.9×)** from
+> `results/t35-awq-{128,256}kcfg-ctx110k.json`. That pair is real but was
+> measured at a different configuration in a different round; the table above
+> supersedes it. `docs/23` separately measures 0.7485 t/s at 241k over two reps.
 
 The patch adds cases 9–16, raising the ceiling to 16 × 64 × 256 = 262,144.
 Validated in production rather than in a unit test:
@@ -145,6 +158,27 @@ cliff. Full curves in `docs/36`.
 > and the buffers are sized right, but no reference comparison has been run at
 > 250k. Run `tests/test_rocm_pa_256k.py` before trusting a result up there.
 
+### 3.1b The int8 MoE gate — the only binary result here
+
+Stock `rocm/vllm` **cannot serve W8A8 at all** on gfx90a. Round 32, same session:
+
+| arm | result |
+|---|---|
+| W8A8 TP=2, **stock** | ✗ `NotImplementedError: No Int8 MoE backend supports the deployment configuration` |
+| W8A8 TP=2, **patched** | ✅ 5,956 t/s prefill @16k · 4,669 @25k · **51.06 t/s decode** |
+
+Not a percentage — a yes/no. The format §4 recommends as the sensible default
+does not load on an unpatched image.
+
+**This win has a shelf life.** AMD fixed it upstream in
+[`1053e248f0`](https://github.com/vllm-project/vllm/commit/1053e248f0) (PR
+#46765, `[ROCm][Quantization][5/N]`, 2026-07-27), broadening the gate to
+`or current_platform.is_rocm()` — wider than our gfx9-scoped version. It landed
+as a side effect of a Quark refactor, twelve days *after* the
+`rocm7.14.0_cdna_..._vllm_0.23.0` image was published, so it is in no released
+`rocm/vllm` build yet. Drop `configs/enable_int8_moe_rocm.py` when AMD ships an
+image carrying it.
+
 ### 3.2 AITER ASM flash attention — real, but narrow
 
 Before, on a stock image, the engine logs something that looks completely
@@ -162,8 +196,28 @@ Overriding with ROCM_AITER_FA out of potential backends:
   ['ROCM_AITER_FA', 'ROCM_ATTN', 'TRITON_ATTN']
 ```
 
-and `fwd_hd128_bf16_rtna_group.co` loads 44× per arm. Qwen3-30B-A3B, output
-tokens/s:
+and `fwd_hd128_bf16_rtna_group.co` loads 44× per arm.
+
+> **Getting AITER into the candidate list is not the same as getting it used,
+> and this repo confused the two.** `_get_backend_priorities()` appends
+> `ROCM_ATTN` **unconditionally first**, so `ROCM_AITER_FA` is reached only when
+> `ROCM_ATTN` is invalid — which it essentially never is. Selection requires
+> `configs/prefer_aiter_fa_gfx90a.py` **and** `VLLM_PREFER_AITER_FA=1`.
+>
+> The first build of `vllm-mi210` omitted that patch, and nothing caught it:
+> the build passed, `verify-gfx90a` passed all five checks, and
+> `is_aiter_attention_supported()` answered `True` — while **zero ASM kernels
+> ran**. Round 32 found it by counting `LoadKernel` lines. Both the Dockerfile
+> and the verifier now check the ordering, not just candidacy.
+>
+> **So round 32 cannot measure this patch.** Its `awq32k` arms are `ROCM_ATTN`
+> vs `ROCM_ATTN` — 0 `LoadKernel` in both — and came out at 0.99–1.01×, which
+> is evidence that the two images are otherwise identical and **no evidence at
+> all about AITER**. The numbers below remain the best measurement of the ASM
+> path and come from `benchmarks/vllm-aiter-asm-gfx90a.md`, on an image where it
+> was actually selected.
+
+Qwen3-30B-A3B, output tokens/s:
 
 | prompt | concurrency | stock | ASM | factor |
 |---:|---:|---:|---:|---:|
