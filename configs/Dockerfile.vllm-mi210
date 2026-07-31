@@ -81,6 +81,7 @@ COPY configs/repatch_gfx942_to_gfx90a.py \
      configs/enable_gfx90a_asm_paths.py \
      configs/enable_vllm_aiter_gfx90a.py \
      configs/extend_rocm_pa_256k_gfx9.py \
+     configs/enable_int8_moe_rocm.py \
      /opt/mi210/
 
 # --- 1. AITER v0.1.19 from source ------------------------------------------
@@ -129,6 +130,42 @@ RUN python3 /opt/mi210/enable_gfx90a_asm_paths.py
 
 # --- 4. let vLLM route attention to AITER ----------------------------------
 RUN python3 /opt/mi210/enable_vllm_aiter_gfx90a.py
+
+# --- 4b. let INT8 MoE run at all --------------------------------------------
+#
+# WITHOUT THIS THE IMAGE CANNOT SERVE W8A8, which is the format docs/37
+# recommends as best all-round. Loading one dies at startup with
+#
+#   NotImplementedError: No Int8 MoE backend supports the deployment configuration.
+#
+# There is exactly one Int8 MoE backend (TRITON -> TritonExperts) and it refuses,
+# not for a hardware reason: `_supports_quant_scheme` gates INT8 behind
+# `current_platform.is_cuda() and has_device_capability((7,5))` -- a CUDA-only
+# predicate carrying a Turing compute-capability comment that means nothing on
+# AMD -- while the device check three lines above it in the same class uses
+# `is_cuda_alike()`, which accepts ROCm. So the kernel is declared runnable here
+# and its INT8 scheme is then refused.
+#
+# gfx90a has v_mfma_i32_16x16x16i8 and peaks at 181 TOPS INT8, the same as its
+# bf16 peak, so INT8 is the natural quantization for this card.
+#
+# This was missed in the first build of this image, and the miss is instructive:
+# every arm in docs/28 that produced a W8A8 number ran on an image where this had
+# been applied by hand, and none of the images on the box today carries it. The
+# recommendation and the artifact had drifted apart precisely because the patch
+# lived outside the build.
+#
+# Grep for `_rocm_int8`, the variable the patch actually introduces. An earlier
+# version of this check grepped for `is_rocm() and on_gfx9()`, which appears in
+# the script's DOCSTRING as a simplified illustration but never in the code it
+# writes -- the real replacement is a multi-line block that imports on_gfx9
+# inside an is_rocm() guard. Verifying against documentation rather than against
+# the emitted text failed this build with the patch correctly applied.
+RUN set -eux; \
+    python3 /opt/mi210/enable_int8_moe_rocm.py; \
+    grep -q '_rocm_int8' \
+      "${SITE}/vllm/model_executor/layers/fused_moe/experts/triton_moe.py" \
+      || { echo 'FATAL: int8 MoE gate not widened' >&2; exit 1; }
 
 # --- 5. extend ROCm paged attention to 256k, and rebuild _rocm_C -----------
 #
@@ -194,6 +231,12 @@ elif so.read_bytes() == stock.read_bytes():
 stale = list((site / "aiter/jit").glob("module_fmha_v3_fwd*.so"))
 if stale:
     bad.append(f"pre-built fmha JIT module(s) present, layout predates the patch: {stale}")
+# Without this the image cannot serve W8A8 at all. Checked here as well as at
+# the patch step because this is the gate the whole "best all-round"
+# recommendation rests on, and the first build of this image shipped without it.
+triton_moe = site / "vllm/model_executor/layers/fused_moe/experts/triton_moe.py"
+if "_rocm_int8" not in triton_moe.read_text():
+    bad.append("triton_moe.py: INT8 MoE still gated to CUDA -- W8A8 will not load")
 if bad:
     print("FATAL: image is half-patched:", *bad, sep="\n  ", file=sys.stderr)
     sys.exit(1)

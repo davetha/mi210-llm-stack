@@ -195,7 +195,59 @@ objects are reachable from vLLM** — see §5. The other 194 are installed becau
 the repatcher is a whole-tree tool and their presence costs nothing, not because
 they do anything.
 
-### 3.4 Not patches, but the same size of win — configuration
+### 3.4 PCIe peer-to-peer — a premise that was wrong for the whole project
+
+`env/gfx90a-common.env` carried `NCCL_P2P_DISABLE=1` from the beginning,
+justified by *"the two MI210s have NO xGMI bridge and cannot peer-to-peer"*. The
+first half is true. **The second does not follow from it, and it is false.**
+Found by outside review from [Andrei-Dr](https://github.com/Andrei-Dr).
+
+The driver says so — `p2p_links/0/properties` reports type 2
+(`HSA_IOLINKTYPE_PCIEXPRESS`; XGMI would be 11), 32000 MB/s, `flags 3` =
+Override + NonCoherent, so bit 4 `NoPeerToPeerDMA` is **clear**. And the runtime
+agrees:
+
+| | |
+|---|---:|
+| `can_device_access_peer(0,1)` | **True** (and reciprocal) |
+| cuda:0 → cuda:1 | **26.98 GB/s** (84% of PCIe 4.0 x16) |
+| via pinned host, 2 hops | 14.16 GB/s |
+
+A host-staged copy makes two trips over the same link and cannot exceed about
+half the link rate, so 26.98 GB/s is not reachable that way — the copy peers.
+Every TP=2 allreduce ever measured in this project took the 14 GB/s path.
+
+The A/B (round 31, 3 reps per arm, Qwen3-30B-A3B W8A8 at TP=2):
+
+| workload | metric | P2P off | P2P on | delta |
+|---|---|---:|---:|---:|
+| cold 16k | prefill t/s | 7,279.2 | **8,093.0** | **+11.2%** |
+| cold 16k | TTFT s | 2.085 | **1.869** | **−10.3%** |
+| longctx | prefill t/s | 6,190.8 | **6,760.7** | **+9.2%** |
+| longctx | TTFT s | 4.162 | **3.811** | **−8.4%** |
+| longctx | decode t/s | 54.06 | 54.76 | +1.3% — noise |
+
+**Prefill gains, decode does not**, which is the expected shape rather than a
+disappointment: prefill allreduces move large activation tensors and are
+bandwidth-bound; decode allreduces move small buffers and are latency-bound.
+Andrei explicitly predicted this could happen — *"P2P could be real and still
+not move decode"* — and it did.
+
+The control validates the harness: its cold-16k prefill is **7,279.2** against
+`docs/28`'s published **7,278**, and it loaded in 59.4 s against 60 s.
+
+It also refutes one of the risks he raised against his own finding. `ACSCtl`
+does read `ReqRedir+ CmpltRedir+` on both upstream bridges, so peer traffic is
+redirected through the root complex rather than routed bridge-to-bridge — but
+the 26.98 GB/s **already includes that redirect**. `pcie_acs_override=downstream`
+remains a further, untested lever.
+
+**The default is now `NCCL_P2P_DISABLE=0`.** The RCCL setup stall that motivated
+the flag was real and is still unexplained; it did not recur across the four
+TP=2 collective setups run here. That is evidence, not proof — revert with
+`NCCL_P2P_DISABLE=1` and label the run.
+
+### 3.5 Not patches, but the same size of win — configuration
 
 | change | before | after | factor |
 |---|---:|---:|---:|
@@ -256,6 +308,29 @@ Why: int8 is the **one quantized format that reaches CDNA2's matrix cores
 natively**. `v_mfma_i32_16x16x16i8` exists; there is no fp8 or fp4 equivalent.
 Both weights and activations stay int8 into the GEMM, so unlike int4 there is no
 dequantization tax.
+
+> **W8A8 requires `configs/enable_int8_moe_rocm.py`, and the first build of this
+> image shipped without it.** Loading a W8A8 MoE on an unpatched image dies at
+> startup with `NotImplementedError: No Int8 MoE backend supports the deployment
+> configuration` — vLLM's only Int8 MoE backend gates the scheme behind
+> `current_platform.is_cuda() and has_device_capability((7,5))`, a CUDA-only
+> predicate three lines below a device check that uses `is_cuda_alike()` and
+> accepts ROCm. The patch is now applied at step 4b and gated twice.
+>
+> **A correction, and a lesson about how it was found.** This paragraph first
+> claimed that *none* of the images on the box carried the patch, and that
+> `docs/28`'s W8A8 numbers therefore came from an image that no longer existed.
+> That was wrong. `:latest` and `:pa256k` both carry it. The claim came from
+> grepping for `is_rocm() and on_gfx9()` — a string that appears in
+> `enable_int8_moe_rocm.py`'s **docstring**, as a simplified illustration, and
+> never in the code the script actually writes. The real replacement is a
+> multi-line block that imports `on_gfx9` inside an `is_rocm()` guard and
+> assigns `_rocm_int8`.
+>
+> The same wrong string was used as the build gate, which then failed a build in
+> which the patch had applied correctly. **Verify against the emitted text, not
+> against the documentation of the emitted text.** Only the `vllm-mi210` image
+> genuinely lacked the patch; that gap was real and is fixed.
 
 **W8A16** (`compressed-tensors` with `input_activations: null`) is the same
 weights with bf16 activations: 14% better decode at 80B, 8.5% worse prefill.
