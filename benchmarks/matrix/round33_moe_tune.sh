@@ -213,7 +213,7 @@ echo "OK: $WANT"
 python3 - <<PY
 import json
 d = json.load(open("$OUT/$WANT"))
-ks = sorted(int(k) for k in d)
+ks = sorted((int(k) for k in d if k.isdigit()))
 print(f"  batch sizes tuned: {len(ks)} -> {ks}")
 print(f"  sample (M={ks[0]}): {d[str(ks[0])]}")
 PY
