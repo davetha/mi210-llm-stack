@@ -75,9 +75,28 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 # defect that let `nccl-probe` hold 41.88 GiB while the next round started arms
 # on top of it (docs/29).
 docker rm -f bench-moe-tune >/dev/null 2>&1 || true
-echo "=== $(date -u +%T) tuning (full batch list, one invocation) ==="
+echo "=== $(date -u +%T) tuning (12 batch sizes, one invocation) ==="
 echo "    target: $WANT"
-timeout 21600 docker run --rm --name bench-moe-tune \
+# AN EXPLICIT BATCH LIST, and why it is shorter than the default.
+#
+# benchmark_moe.py's default is 19 sizes up to 4096. Measured rate on this box
+# is ~2.2 config-evaluations/s against search spaces of 2.66k-4.99k per size,
+# two sizes in flight, which projects to roughly 4 hours -- against a 6 hour
+# timeout, and save_configs() is called ONCE at the end, so an overrun loses
+# everything. docs/25 records two previous tuning attempts losing ~3 GPU-hours
+# each. A 50% margin is not worth that.
+#
+# The 12 sizes below are chosen, not merely fewer. docs/33's finding is that
+# DECODE sits on the wrong side of a 2.5x tile spread, and decode is small-M:
+# batch 1-64 covers single-stream and modest concurrency, which is every decode
+# measurement in this repo. 128-2048 covers chunked prefill at -ub 2048. Dropping
+# 3072 and 4096 costs nothing we serve.
+#
+# A partial config is not a broken one. get_moe_configs returns a dict keyed by
+# M and try_get_optimal_moe_config selects the nearest entry, so uncovered sizes
+# fall back to exactly the heuristics they use today -- strictly no worse than
+# now, whereas a timeout yields nothing at all.
+timeout 28800 docker run --rm --name bench-moe-tune \
     --device /dev/kfd --device /dev/dri --group-add 44 --group-add 991 \
     --security-opt seccomp=unconfined --ipc=host --shm-size 32G \
     -v /mnt/llm-storage:/models -v "$BIN":/bin2 \
@@ -85,6 +104,7 @@ timeout 21600 docker run --rm --name bench-moe-tune \
     --entrypoint python3 "$IMG" \
     /bin2/benchmark_moe.py --model /models/bench-matrix/t35-w8a8 \
     --tune --tp-size 2 --dtype auto --seed 1234 \
+    --batch-size 1 2 4 8 16 32 64 128 256 512 1024 2048 \
     --save-dir /models/bench-matrix/moe-configs-mi210 > "$RAW" 2>&1
 rc=$?
 echo "tuner exit: $rc  (124 = hit the 6h timeout)"
