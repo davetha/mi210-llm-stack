@@ -7,29 +7,42 @@
 # larger shapes select 32x32x8bf16_1k at 485-497, with ~450-500 instructions of
 # fixed overhead either way. Decode sits on the wrong side of a 2.5x spread.
 #
-# THE FILENAME THIS MUST PRODUCE, and a correction to the repo -----------------
+# THE FILENAME THIS MUST PRODUCE ----------------------------------------------
 #
-# docs/25 item 3b, the header of tune_moe_w8a8_v4.sh, and the docstring of
-# configs/fix_benchmark_moe_int8_w8a16.py all treat `--dtype auto` as defective
-# because it "omits the tag", and treat `dtype=int8_w8a16` as the filename to
-# aim for. For the W8A8 checkpoint we actually serve, that is backwards.
+#   E=128,N=384,device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json
 #
-# Read the lookup rather than assuming it. fused_moe.py:1595 calls
-# _get_config_dtype_str with use_fp8_w8a8, use_int8_w8a16 and use_int4_w4a16 --
-# there is NO use_int8_w8a8 parameter, and config.py:36-66 has no branch for it.
-# A W8A8 MoE therefore falls through to `return None`, and get_config_file_name
-# (fused_moe.py:1006) renders `dtype_selector = ""`. The file the runtime opens
-# at serve time is:
+# WITH the dtype tag. An earlier revision of this header argued the opposite at
+# length and was wrong; it is worth recording why, because the reasoning looked
+# solid.
 #
-#   E=128,N=384,device_name=AMD_Instinct_MI210.json      <- no dtype tag
+# It read fused_moe.py:1595, saw _get_config_dtype_str called with
+# use_fp8_w8a8 / use_int8_w8a16 / use_int4_w4a16 and NO use_int8_w8a8 parameter,
+# checked config.py:36-66 for a branch that did not exist, and concluded a W8A8
+# MoE falls through to `return None` and therefore looks up an untagged file.
+# Every one of those observations is true. The conclusion was still wrong,
+# because the compressed-tensors W8A8 serving path sets use_int8_w8a16=True --
+# so the "no use_int8_w8a8 parameter" fact means the opposite of what it looked
+# like.
 #
-# So an `int8_w8a16`-tagged file would be tuned for hours and then never read by
-# the W8A8 arm. `--dtype auto` was right all along; the only genuine defect in
-# the v1/v2 attempts was `--tp-size 1`, which gives N=768 instead of N=384.
+# Round 34 settled it empirically, and only because it asserted on the load
+# before reading any number. vLLM logged:
 #
-# int8_w8a16 tuning is still worth doing later for the tier-2 W8A16 checkpoints
-# (cyankiwi AWQ-8bit), and configs/fix_benchmark_moe_int8_w8a16.py is what
-# unblocks it -- but that is a different file and a different arm.
+#   Using default MoE config. Performance might be sub-optimal! Config file not
+#   found at /models/bench-matrix/moe-configs-mi210/E=128,N=384,
+#   device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json
+#
+# So docs/25 item 3b, tune_moe_w8a8_v4.sh's header and the docstring of
+# configs/fix_benchmark_moe_int8_w8a16.py were right all along, and ~7.5
+# GPU-hours were spent producing a well-formed file with the wrong name. It
+# cannot be salvaged by renaming: `--dtype auto` benchmarked a different kernel,
+# and a config generated under the wrong scheme is worse than none.
+#
+# The genuine defect in the v1/v2 attempts remains `--tp-size 1`, which gives
+# N=768 instead of N=384.
+#
+# This round therefore needs configs/fix_benchmark_moe_int8_w8a16.py applied to
+# benchmark_moe.py first -- without it the int8_w8a16 path dies in const_data_ptr
+# before measuring anything, which is what blocked this for weeks.
 #
 # N=384 because moe_intermediate_size is 768 and the serving arm is TP=2.
 # E=128 from num_experts. Both read from the checkpoint, asserted below.
@@ -53,7 +66,7 @@ BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
 OUT=$BASE/moe-configs-mi210
 RAW=$BASE/logs/rd33-tuner.log
-WANT="E=128,N=384,device_name=AMD_Instinct_MI210.json"
+WANT="E=128,N=384,device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json"
 IMG=vllm-mi210:latest
 cd "$BASE"
 
@@ -85,7 +98,7 @@ mkdir -p "$OUT"
 # defect that let `nccl-probe` hold 41.88 GiB while the next round started arms
 # on top of it (docs/29).
 docker rm -f bench-moe-tune >/dev/null 2>&1 || true
-echo "=== $(date -u +%T) tuning: 12 batch sizes, one invocation each, merged ==="
+echo "=== $(date -u +%T) tuning: 8 batch sizes, one invocation each, merged ==="
 echo "    target: $WANT"
 # ONE BATCH SIZE PER INVOCATION, MERGED AFTER EACH -- because the tuner dies.
 #
@@ -119,7 +132,7 @@ echo "    target: $WANT"
 MERGED="$OUT/$WANT"
 declare -a DONE_SIZES=() FAILED_SIZES=()
 
-for bs in 1 2 4 8 16 32 64 128 256 512 1024 2048; do
+for bs in 1 2 4 8 16 32 64 128; do
     if [ -f "$MERGED" ] && python3 -c "
 import json,sys; sys.exit(0 if '$bs' in json.load(open('$MERGED')) else 1)" 2>/dev/null; then
         echo "--- batch_size=$bs already tuned, skipping ---"
@@ -130,16 +143,16 @@ import json,sys; sys.exit(0 if '$bs' in json.load(open('$MERGED')) else 1)" 2>/d
     echo "--- $(date -u +%T) batch_size=$bs ---"
     rm -rf "$OUT/staging"; mkdir -p "$OUT/staging"
     docker rm -f bench-moe-tune >/dev/null 2>&1 || true
-    # 45 min per size. Nothing here legitimately takes longer; the observed rate
-    # is ~2.2 config-evals/s over 2.66k-4.99k candidates.
-    timeout 2700 docker run --rm --name bench-moe-tune \
+    # 90 min per size. The first attempt used 45 and hit exit 124 on every size
+    # from 8 upward -- six consecutive timeouts, ~4.5 GPU-hours for nothing.
+    timeout 5400 docker run --rm --name bench-moe-tune \
         --device /dev/kfd --device /dev/dri --group-add 44 --group-add 991 \
         --security-opt seccomp=unconfined --ipc=host --shm-size 32G \
         -v /mnt/llm-storage:/models -v "$BIN":/bin2 \
         -e HSA_NO_SCRATCH_RECLAIM=1 -e NCCL_P2P_DISABLE=1 \
         --entrypoint python3 "$IMG" \
         /bin2/benchmark_moe.py --model /models/bench-matrix/t35-w8a8 \
-        --tune --tp-size 2 --dtype auto --seed 1234 --batch-size "$bs" \
+        --tune --tp-size 2 --dtype int8_w8a16 --seed 1234 --batch-size "$bs" \
         --save-dir /models/bench-matrix/moe-configs-mi210/staging \
         >> "$RAW" 2>&1
     rc=$?
