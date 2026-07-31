@@ -43,7 +43,7 @@ set -uo pipefail
 BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
 CFG=$BASE/moe-configs-mi210
-WANT="E=128,N=384,device_name=AMD_Instinct_MI210.json"
+WANT="E=128,N=384,device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json"
 cd "$BASE"
 
 . "$BIN/wait_for_bench.sh"
