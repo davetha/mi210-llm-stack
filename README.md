@@ -89,6 +89,11 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 - [`docs/26-choosing-checkpoints-on-mi210.md`](docs/26-choosing-checkpoints-on-mi210.md) — **what to actually download**: two fields in `config.json` predict nearly all the performance, and neither is the repo name. Plus running MoE with experts in system RAM
 - [`docs/27-which-formats-reach-the-matrix-cores.md`](docs/27-which-formats-reach-the-matrix-cores.md) — int8 is the **only** sub-16-bit matrix dtype gfx90a has (no int4 MFMA, no fp8, no sparsity), and the AITER ASM kernels are bf16 *attention* — so they help every format, not just W8A8
 - [`docs/28-model-weight-matrix.md`](docs/28-model-weight-matrix.md) — **start here for "what should I download"**: best weights per tier, the smaller secondary picks, and what never to use — every row measured on this box
+- [`docs/30-instruction-budget-gfx90a.md`](docs/30-instruction-budget-gfx90a.md) — the shipped Triton GEMMs issue **~100 instructions per MFMA**; under 3% of issued instructions are matrix ops. Also the full assembled ISA verification table
+- [`docs/31-cpu-prefill-arithmetic.md`](docs/31-cpu-prefill-arithmetic.md) — attention and KV are on GPU, so the 7.4 s/chunk is CPU expert GEMM; the chunk-size model, and the round-13 measurement that **refuted** it
+- [`docs/32-published-rules-not-yet-applied.md`](docs/32-published-rules-not-yet-applied.md) — published methods that emit **data, not kernels**: per-layer KV allocation rules, absorbed rotations, low-rank correction. No wave64/FP8/int4 exposure
+- [`docs/38-serving-layer-and-structural-reduction.md`](docs/38-serving-layer-and-structural-reduction.md) — **`--load-format sharded_state` skips the loader entirely**, making the 7-hour load a one-time cost; why prefix caching is worth more here than on a GPU box; LMCache, REAP
+- [`docs/39-backlog-addendum.md`](docs/39-backlog-addendum.md) — backlog item **1c resized** (~3x, not 6.4x), **1b inverted** (W4A16-fp16 over W4A8-int8), item 2 cliff ruled out, plus DP=2 and low-bit allreduce
 
 ### Benchmarks
 - [`benchmarks/matrix/`](benchmarks/matrix/) — the quantization matrix: harness, sweeps, raw JSON, and [`REPRODUCE.md`](benchmarks/matrix/REPRODUCE.md) with exact tags, versions and CLI args
