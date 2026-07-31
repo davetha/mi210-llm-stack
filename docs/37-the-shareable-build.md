@@ -251,7 +251,7 @@ TP=2 collective setups run here. That is evidence, not proof — revert with
 
 | change | before | after | factor |
 |---|---:|---:|---:|
-| bf16 load via `--load-format sharded_state` | 12,366 s | **114.65 s** | **108×** |
+| bf16 load via `--load-format sharded_state`, **per restart** | 12,366 s | **114.65 s** | **108×** |
 | `GGML_CUDA_FORCE_MMQ` (llama.cpp), VRAM-saturated | 204.5 | 214.3 | 1.048× |
 | `GGML_CUDA_FORCE_MMQ`, otherwise | — | — | ~1.00× (and −1.9% in places) |
 
@@ -259,6 +259,27 @@ TP=2 collective setups run here. That is evidence, not proof — revert with
 patch at all — it is a stock flag whose flat `param_data.copy_()` bypasses the
 per-tensor `weight_loader` entirely. Throughput after conversion is unchanged
 (8,743 → 8,755 t/s), so this is purely load time. See `docs/34`.
+
+> **The 108× is per restart, not free.** Creating the snapshot runs the model
+> through the *same* slow loader once, so the honest statement is
+> **12,366 s every start → 12,366 s once, then 114.65 s every start.** It pays
+> for itself on the second start and the ratio is real, but the slow load does
+> not disappear — it is paid once and amortised. It also costs a second full
+> copy of the weights on disk, is bound to the `--tensor-parallel-size` it was
+> written at (the file glob embeds `rank=`), and snapshots post-
+> `process_weights_after_loading` runtime tensors, so it must be regenerated
+> after a vLLM bump.
+>
+> **What the pair is not confounded by.** Both endpoints are the same
+> `Loading weights took` line, same model (28.51 GiB/rank), same rank, same
+> TP=2, same box — and both reproduce: the stock loader measured 12,365.46 s
+> and 12,357.66 s on separate days (0.06% apart), `sharded_state` 114.65 s and
+> 116.72 s (1.8% apart). Page cache is the obvious suspect, since 57 GiB fits
+> easily in 499 GB of RAM, but **neither endpoint is I/O-bound**: `docs/25`
+> measured storage delivering this model in 13.19 s at 4.63 GB/s, and 114.65 s
+> for 57 GiB is ~0.5 GB/s — already 9× slower than the disk. A caching effect
+> cannot open a 108× gap between two loads that are both limited by something
+> other than reading bytes.
 
 `FORCE_MMQ` needs its own image and buys ~5% in one narrow case. **We are not
 shipping it.** It is documented in `configs/Dockerfile.llama-forcemmq` for
@@ -279,7 +300,7 @@ Pick by workload.
 | you want | run | prefill | decode |
 |---|---|---:|---:|
 | **Best all-round** | `RedHatAI/*-quantized.w8a8`, vLLM TP=2 | 7,278 | 43.4 |
-| **Fastest, if you restart rarely** | bf16 + `--load-format sharded_state` | **8,755** | **65.2** |
+| **Fastest, if you have the VRAM** | bf16 + `--load-format sharded_state` | **8,755** | **65.2** |
 | **Best decode at 80B** | `cyankiwi/*-AWQ-8bit` (W8A16), TP=2 | 6,679 | **51.3** |
 | **Best prefill at 80B** | `RedHatAI/*.w8a8`, TP=2 | **7,253** | 45.2 |
 | **Smallest that still flies** | AWQ-Int4, TP=1 | 3,002 | 17.2 |
