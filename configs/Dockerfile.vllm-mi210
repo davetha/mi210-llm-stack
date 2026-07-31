@@ -83,6 +83,7 @@ COPY configs/repatch_gfx942_to_gfx90a.py \
      configs/extend_rocm_pa_256k_gfx9.py \
      configs/enable_int8_moe_rocm.py \
      configs/enable_sharded_state_tp_check.py \
+     configs/prefer_aiter_fa_gfx90a.py \
      /opt/mi210/
 
 # --- 1. AITER v0.1.19 from source ------------------------------------------
@@ -167,6 +168,42 @@ RUN set -eux; \
     grep -q '_rocm_int8' \
       "${SITE}/vllm/model_executor/layers/fused_moe/experts/triton_moe.py" \
       || { echo 'FATAL: int8 MoE gate not widened' >&2; exit 1; }
+
+# --- 4b2. let AITER flash attention actually be SELECTED, not just admitted --
+#
+# THE FIRST BUILD OF THIS IMAGE OMITTED THIS, and the omission is invisible in
+# every check the build and verify-gfx90a previously performed.
+#
+# enable_vllm_aiter_gfx90a.py gets ROCM_AITER_FA into the candidate list.
+# It does not get it chosen. _get_backend_priorities() in platforms/rocm.py is a
+# plain ordered list and the first valid entry wins:
+#
+#     if not use_kv_connector:
+#         backends.append(AttentionBackendEnum.ROCM_ATTN)      # always first
+#     if rocm_aiter_ops.is_mha_enabled():
+#         backends.append(AttentionBackendEnum.ROCM_AITER_FA)  # only ever second
+#
+# ROCM_ATTN is appended unconditionally, so AITER is reached only when ROCM_ATTN
+# is invalid -- which it essentially never is. Round 32 caught this on the real
+# thing: the "patched" arm logged
+#
+#     Overriding with ROCM_ATTN out of potential backends:
+#         ['ROCM_ATTN', 'ROCM_AITER_FA', 'TRITON_ATTN']
+#
+# and loaded ZERO gfx90a code objects. Admitted, and unused. Note that
+# is_aiter_attention_supported() answers True throughout, which is why checking
+# candidacy is not a substitute for checking selection.
+#
+# The reorder is gated on VLLM_PREFER_AITER_FA=1 and OFF by default, so this
+# step changes nothing unless an arm asks for it. vLLM logs "Unknown vLLM
+# environment variable detected: VLLM_PREFER_AITER_FA" because the name is not
+# in its own envs registry -- that warning is expected and does NOT mean the
+# flag is inert, since the patched rocm.py reads os.environ directly.
+RUN set -eux; \
+    python3 /opt/mi210/prefer_aiter_fa_gfx90a.py; \
+    grep -q '_prefer_aiter_fa' \
+      "${SITE}/vllm/platforms/rocm.py" \
+      || { echo 'FATAL: AITER FA priority reorder not applied' >&2; exit 1; }
 
 # --- 4c. make a TP-mismatched sharded_state load fail instead of lying ------
 #
@@ -260,6 +297,11 @@ if "_rocm_int8" not in triton_moe.read_text():
 ssl = site / "vllm/model_executor/model_loader/sharded_state_loader.py"
 if "_saved_tp_size" not in ssl.read_text():
     bad.append("sharded_state_loader.py: TP-mismatch guard missing")
+# Candidacy is not selection. Without the reorder, ROCM_AITER_FA sits in the
+# backend list and ROCM_ATTN wins every time, so no ASM kernel ever loads --
+# which is exactly what the first build of this image shipped.
+if "_prefer_aiter_fa" not in (site / "vllm/platforms/rocm.py").read_text():
+    bad.append("platforms/rocm.py: AITER FA can be admitted but never selected")
 if bad:
     print("FATAL: image is half-patched:", *bad, sep="\n  ", file=sys.stderr)
     sys.exit(1)

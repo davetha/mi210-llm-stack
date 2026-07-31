@@ -133,6 +133,27 @@ else
     bad "could not query vLLM's AITER gate:"; printf '%s\n' "${out}" | tail -8
 fi
 
+# ...and that it can actually be CHOSEN, which is a separate question.
+#
+# This check exists because the first build of this image passed everything
+# above and still never ran an ASM kernel. _get_backend_priorities() appends
+# ROCM_ATTN unconditionally and returns the first valid entry, so AITER sits in
+# the candidate list forever:
+#
+#   Overriding with ROCM_ATTN out of potential backends:
+#       ['ROCM_ATTN', 'ROCM_AITER_FA', 'TRITON_ATTN']
+#
+# Round 32 measured that arm at zero LoadKernel lines. Candidacy is not
+# selection, and only the ordering distinguishes them.
+if grep -q '_prefer_aiter_fa' \
+     "${SITE}/vllm/platforms/rocm.py" 2>/dev/null; then
+    pass "ROCM_AITER_FA can outrank ROCM_ATTN (serve with VLLM_PREFER_AITER_FA=1)"
+else
+    bad "AITER FA is admitted but can never be SELECTED -- ROCM_ATTN is appended"
+    echo "        first unconditionally, so no ASM kernel will ever load."
+    echo "        Apply configs/prefer_aiter_fa_gfx90a.py."
+fi
+
 echo
 echo "=== 5. paged attention accepts npar_loops > 8 (the 256k patch) ==="
 # 8 * 64 * 256 = 131,072 is the stock ceiling. A max_seq_len above it must NOT
