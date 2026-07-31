@@ -53,7 +53,13 @@ docker run -d --name "$NAME" \
   -v /var/cache/mi210-ccache:/ccache \
   -p "${PORT}:8000" \
   -e HSA_NO_SCRATCH_RECLAIM=1 \
-  -e NCCL_P2P_DISABLE=1 \
+  `# Overridable, and defaulting to 1 here on purpose -- unlike` \
+  `# serve_vllm_aiter.sh, which defaults to 0 since round 31 measured P2P` \
+  `# worth +11.2% prefill. This script is the STOCK baseline, so it keeps the` \
+  `# stock-era default. Any A/B spanning both scripts must pin this value` \
+  `# explicitly on both sides, or the patched arm silently collects P2P's` \
+  `# gain on top of whatever it was actually measuring.` \
+  -e NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}" \
   -e GPU_MAX_HW_QUEUES=4 \
   -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=100G -e CCACHE_DEPEND=1 \
   -e PYTHONHASHSEED=0 \

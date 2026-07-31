@@ -82,6 +82,7 @@ COPY configs/repatch_gfx942_to_gfx90a.py \
      configs/enable_vllm_aiter_gfx90a.py \
      configs/extend_rocm_pa_256k_gfx9.py \
      configs/enable_int8_moe_rocm.py \
+     configs/enable_sharded_state_tp_check.py \
      /opt/mi210/
 
 # --- 1. AITER v0.1.19 from source ------------------------------------------
@@ -167,6 +168,25 @@ RUN set -eux; \
       "${SITE}/vllm/model_executor/layers/fused_moe/experts/triton_moe.py" \
       || { echo 'FATAL: int8 MoE gate not widened' >&2; exit 1; }
 
+# --- 4c. make a TP-mismatched sharded_state load fail instead of lying ------
+#
+# TEMPORARY BACKPORT -- DELETE THIS STEP once the upstream PR lands.
+# github.com/davetha/vllm branch fix/sharded-state-tp-mismatch.
+#
+# ShardedStateLoader narrows any parameter whose saved tensor is smaller than
+# the runtime one and copies into that partial view, warning but continuing.
+# That guard exists for LoRA padding, but it equally accepts a shard of half the
+# size, which is what a TP=2 snapshot looks like to a TP=1 runtime. Measured
+# here: 194 warnings, half the 151936-row embedding never written, "Application
+# startup complete", and generation of "!!!!!!!!". Our own bench harness catches
+# it via the ACKNOWLEDGED probe, but only after a full load and serve.
+#
+# Confirmed still present on upstream main. The script emits a file
+# byte-identical to that commit.
+RUN set -eux; \
+    python3 /opt/mi210/enable_sharded_state_tp_check.py; \
+    python3 /opt/mi210/enable_sharded_state_tp_check.py --assert-patched
+
 # --- 5. extend ROCm paged attention to 256k, and rebuild _rocm_C -----------
 #
 # This is the only step that compiles vLLM itself. It edits csrc/rocm/attention.cu
@@ -237,6 +257,9 @@ if stale:
 triton_moe = site / "vllm/model_executor/layers/fused_moe/experts/triton_moe.py"
 if "_rocm_int8" not in triton_moe.read_text():
     bad.append("triton_moe.py: INT8 MoE still gated to CUDA -- W8A8 will not load")
+ssl = site / "vllm/model_executor/model_loader/sharded_state_loader.py"
+if "_saved_tp_size" not in ssl.read_text():
+    bad.append("sharded_state_loader.py: TP-mismatch guard missing")
 if bad:
     print("FATAL: image is half-patched:", *bad, sep="\n  ", file=sys.stderr)
     sys.exit(1)
