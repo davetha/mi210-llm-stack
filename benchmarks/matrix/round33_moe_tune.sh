@@ -34,13 +34,20 @@
 # N=384 because moe_intermediate_size is 768 and the serving arm is TP=2.
 # E=128 from num_experts. Both read from the checkpoint, asserted below.
 #
-# ONE INVOCATION, NOT ONE PER BATCH -------------------------------------------
+# ONE BATCH SIZE PER INVOCATION, MERGED ---------------------------------------
 #
-# benchmark_moe.py:996 builds {batch_size: config} across the whole list and
-# save_configs writes ONE file. v1 invoked it once per batch size, so each run
-# overwrote the last and only the final batch survived -- ~3 GPU-hours for one
-# usable entry. Passing no --batch-size uses the full default list (line 902)
-# and produces a complete config in a single pass.
+# An earlier revision of this header argued the opposite -- pass the whole list
+# in one invocation, since benchmark_moe.py:996 builds {batch_size: config}
+# across the list and save_configs writes ONE file, whereas v1 invoked it per
+# size and each run overwrote the last.
+#
+# Both halves of that are true and the conclusion was still wrong, because
+# save_configs runs once at the END. When a Ray worker died partway through
+# (see the loop below) the three completed batch sizes went with it. v1's real
+# mistake was not the per-size invocation, it was failing to MERGE between them
+# -- which is exactly what tune_moe_merge.sh in this directory exists to do.
+#
+# So: one size per invocation, merged after each, and reruns resume.
 set -uo pipefail
 BASE=/mnt/llm-storage/bench-matrix
 BIN=$BASE/bin
