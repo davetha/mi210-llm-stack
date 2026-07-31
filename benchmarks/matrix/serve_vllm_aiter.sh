@@ -15,7 +15,15 @@ docker run -d --name "$NAME" \
   --security-opt seccomp=unconfined --ipc=host --shm-size 32G \
   -v "$H":/models -v /var/cache/mi210-ccache:/ccache \
   -p "${PORT}:8000" \
-  -e HSA_NO_SCRATCH_RECLAIM=1 -e NCCL_P2P_DISABLE=1 -e GPU_MAX_HW_QUEUES=4 \
+  `# NCCL_P2P_DISABLE is overridable for the same reason VLLM_IMAGE is. It was` \
+  `# hardcoded to 1 on the premise that "no xGMI" means "no peer-to-peer",` \
+  `# which is false: the driver advertises a PCIe P2P link with` \
+  `# NoPeerToPeerDMA clear, and a measured device-to-device copy runs at` \
+  `# 26.98 GB/s against 14.16 GB/s staged through pinned host memory. Left at 1` \
+  `# by default -- the RCCL setup stall that motivated it was real and is still` \
+  `# unexplained -- but an arm can now A/B it without editing this file.` \
+  -e HSA_NO_SCRATCH_RECLAIM=1 -e GPU_MAX_HW_QUEUES=4 \
+  -e NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}" \
   -e VLLM_ROCM_USE_AITER=1 -e VLLM_ROCM_USE_AITER_MHA=1 \
   -e VLLM_ROCM_USE_AITER_LINEAR=0 -e VLLM_ROCM_USE_AITER_MOE=0 \
   -e VLLM_TUNED_CONFIG_FOLDER=${VLLM_TUNED_CONFIG_FOLDER:-} \
