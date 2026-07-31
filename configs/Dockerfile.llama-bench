@@ -1,0 +1,26 @@
+# Add llama-bench to the existing llama.cpp image.
+#
+# The base image was built with `cmake --build build -t llama-server`, i.e. only
+# the server target, so /src/build/bin has the ggml shared libraries but no
+# llama-bench. Everything expensive is already compiled -- 72 MB of ggml objects
+# including every HIP kernel -- so adding this target is one translation unit
+# plus a link, not a rebuild.
+#
+# Built FROM the serving image rather than from source on purpose. llama-bench
+# and llama-server must share the same ggml build for their numbers to be
+# comparable; compiling llama-bench separately would risk measuring a different
+# kernel set than the one docs/28's figures came from.
+FROM llama-rocm714:latest
+ENV ROCM_PATH=/opt/rocm PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}
+
+RUN cd /src && \
+    HIPCXX=/opt/rocm/llvm/bin/clang++ \
+    cmake --build build --config Release -j"$(nproc)" -t llama-bench && \
+    test -x /src/build/bin/llama-bench && \
+    /src/build/bin/llama-bench --help >/dev/null 2>&1 || true
+
+# Fail the BUILD if the binary is missing, rather than discovering it at run time
+# inside a queued round.
+RUN test -x /src/build/bin/llama-bench && echo "verified: llama-bench present"
+
+ENTRYPOINT ["/src/build/bin/llama-bench"]
