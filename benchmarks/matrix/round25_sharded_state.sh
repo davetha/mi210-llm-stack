@@ -51,7 +51,16 @@ echo "=== $(date -u +%T) waiting for other bench work ==="
 bench_wait_for_others
 echo "=== $(date -u +%T) round 25: sharded_state conversion ==="
 
+# PIN BOTH PHASES TO ONE IMAGE. sharded_state snapshots model.state_dict()
+# AFTER process_weights_after_loading -- runtime tensors, not checkpoint tensors
+# -- so the snapshot is only valid for the build that produced it (docs/34).
+# The first version of this round hardcoded the save to :pa256k while
+# serve_vllm_aiter.sh defaults to :latest, two builds 13 hours apart. That made
+# any correctness failure unattributable: AWQ packing and a cross-build layout
+# mismatch produce the same symptom. VLLM_IMAGE is exported so run_arm.sh ->
+# serve_vllm_aiter.sh uses the identical build.
 IMG=rocm-vllm-aiter-gfx90a:pa256k
+export VLLM_IMAGE="$IMG"
 H=/mnt/llm-storage
 
 # --- Phase 1: snapshot. Expect ~3.4 h; this is the cost being amortised. ----
