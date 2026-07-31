@@ -1,0 +1,96 @@
+{
+  "label": "rd34-w8a8-tuned",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 27852,
+  "actual_prompt_tokens": 25727,
+  "ttft_s_median": 6.726285862969235,
+  "ttft_s_min": 6.715973675018176,
+  "ttft_s_max": 6.74195466004312,
+  "implied_prefill_tps_median": 3824.8448733998853,
+  "decode_tps_median": 47.04676533599237,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "ow they specified it.\n\nOkay, final decision: I'll output just \"ACKNOWLEDGED\" to comply perfectly.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      63710072832,
+      63710076928
+    ],
+    "total_gb": 127.42
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      63710072832,
+      63710076928
+    ],
+    "total_gb": 127.42
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 6.726285862969235,
+      "total_s": 12.151047446997836,
+      "stream_tokens": 256,
+      "decode_tps": 47.006675167568794,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text provided before this instruction appears to be random words and seems to be padding that I should ignore.\n\nI'll count from 1 to 60, one number per line, as requested.\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10",
+      "usage": {
+        "prompt_tokens": 25727,
+        "total_tokens": 25983,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "fcaea733cc224b4ab87d0a44686626e2",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785534537.5241354,
+      "actual_prompt_tokens": 25727,
+      "implied_prefill_tps": 3824.8448733998853
+    },
+    {
+      "ttft_s": 6.74195466004312,
+      "total_s": 12.162093618069775,
+      "stream_tokens": 256,
+      "decode_tps": 47.04676533599237,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The instruction says to ignore the long text that appears to be padding.\n\nI'll simply count from 1 to 60, one number per li ...[snip]... \n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nThis is a straightforward counting task. I'll make sure to output exactly 60 lines with the numbers 1 through 60, one per line",
+      "usage": {
+        "prompt_tokens": 25816,
+        "total_tokens": 26072,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "b47907d3519049f2813f977ce39e4f06",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785534549.6785824,
+      "actual_prompt_tokens": 25816,
+      "implied_prefill_tps": 3829.156572796484
+    },
+    {
+      "ttft_s": 6.715973675018176,
+      "total_s": 12.130151442950591,
+      "stream_tokens": 256,
+      "decode_tps": 47.09855808540687,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text provided before this instruction appears to be random words and phrases, but the instruction is clear: I should ou ...[snip]... bers 1 through 60, one per line.\n\nLet me count from 1 to 60:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI'll output these numbers, one per line, as requested.\n</think>\n\n1",
+      "usage": {
+        "prompt_tokens": 25636,
+        "total_tokens": 25892,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "fc468a60000d4927bc6ac9e32857c425",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785534561.8440168,
+      "actual_prompt_tokens": 25636,
+      "implied_prefill_tps": 3817.1680296127156
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 59.378867,
+    "kv_cache_gib": 41.88,
+    "kv_cache_tokens": 914944.0,
+    "graph_capture_gib": 5.15
+  }
+}

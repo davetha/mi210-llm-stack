@@ -125,10 +125,13 @@ echo "    target: $WANT"
 # is every decode measurement in this repo. 128-2048 covers chunked prefill at
 # -ub 2048. Dropping 3072/4096 costs nothing we serve.
 #
-# A partial config is not a broken one, which is what makes this safe:
-# get_moe_configs returns a dict keyed by M and try_get_optimal_moe_config picks
-# the nearest entry, so any size we fail to tune falls back to exactly the
-# heuristics it uses today.
+# WRONG, AND CORRECTED BY ROUND 34: an earlier version of this comment said a
+# partial config is not a broken one, because uncovered sizes "fall back to the
+# heuristics they use today". There is no such fallback. fused_moe.py:1328 is
+#     config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
+# so once a tuned file exists it captures EVERY M, clamped to the nearest key.
+# A file covering only 1..32 serves a prefill at M~2048 from the M=32 entry and
+# cost 20% prefill in round 34. Cover the full M range or ship nothing.
 MERGED="$OUT/$WANT"
 declare -a DONE_SIZES=() FAILED_SIZES=()
 

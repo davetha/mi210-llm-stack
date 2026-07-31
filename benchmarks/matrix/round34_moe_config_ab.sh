@@ -17,8 +17,12 @@
 #   decode   -- M=1, tuned in arm B          -> may move
 #   prefill  -- M~2048, untuned in both arms -> must NOT move
 #
-# A result where both move is not a win, it is evidence of drift, and should be
-# rejected rather than reported.
+# THAT PREMISE IS FALSE and the round disproved it. fused_moe.py:1328 selects
+# configs[min(configs.keys(), key=lambda x: abs(x - M))] -- the nearest tuned
+# entry, with NO fallback to the heuristic. A file covering 1..32 therefore
+# serves M~2048 from the M=32 entry, so prefill was the most affected variable
+# rather than a control, and lost 20%. Kept as written because the flawed
+# reasoning is the record; see docs/41 section 5.
 #
 # WHAT THE TUNED VALUES ALREADY SUGGEST. All three entries chose
 # matrix_instr_nonkdim=16 -- the same 16x16x16 MFMA tile docs/33 identified as

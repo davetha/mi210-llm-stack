@@ -85,11 +85,7 @@ Six batch sizes, covering decode and modest concurrency:
 `BLOCK_SIZE_M = 16` and `BLOCK_SIZE_K = 256` throughout; the search moved
 `BLOCK_SIZE_N`, `GROUP_SIZE_M`, `num_warps` and `waves_per_eu`.
 
-**M=64 and M=128 are absent** — see §3. That is not fatal: `get_moe_configs`
-returns a dict keyed by M and `try_get_optimal_moe_config` selects the nearest
-entry, so uncovered shapes fall back to exactly the heuristics they use today.
-M=1 is what single-stream decode uses, which is where `docs/33`'s hypothesis
-lives.
+**M=64 and M=128 are absent** — see §3 — and that turns out to be fatal. See §5.
 
 ---
 
@@ -151,7 +147,76 @@ The A/B is built so it cannot flatter itself:
   reversible and needs no rebuild. `get_moe_configs` checks that folder *before*
   the shipped configs.
 
-> **Result pending** — round 34 is running at time of writing. A null is a real
-> and publishable outcome here: it would say the shipped heuristics already pick
-> well for decode shapes on gfx90a, and that `docs/33`'s 2.5× spread describes a
-> ceiling unreachable at M=1 rather than headroom left on the table.
+---
+
+## 5. The result: the tuned config makes everything slower
+
+Round 34, W8A8 TP=2, load verified in both arms:
+
+| workload | metric | stock | tuned | factor |
+|---|---|---:|---:|---:|
+| cold 16k | prefill | 5,945.95 | 4,672.43 | **0.786×** |
+| longctx | prefill | 4,667.07 | 3,824.84 | **0.820×** |
+| longctx | decode | 50.88 | 47.05 | **0.925×** |
+
+**Do not install this config.** It is committed as a record of what the tuner
+produces on this hardware, not as a recommendation.
+
+### Why prefill moved, and why §4's "control" was not one
+
+`fused_moe.py:1328`:
+
+```python
+config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
+```
+
+**The nearest tuned entry wins, and there is no fallback.** Once a tuned file
+exists for a given `(E, N, dtype)`, it captures *every* M. With only M=1–32
+present, a chunked prefill at M≈2048 is served by the **M=32** config — a tile
+tuned for a shape 64× smaller. That is the 20% prefill loss, and it is a
+mechanism, not noise.
+
+So this document's own §2 previously claimed "uncovered shapes fall back to
+exactly the heuristics they use today", and round 33's header and PRs #48/#49
+claimed "a partial config is not a broken one". **All of that is wrong.** There
+is no such fallback.
+
+> **A partial `fused_moe` config is worse than none.** Either cover the full M
+> range the workload touches, or ship nothing. This is the single most useful
+> thing on this page and it is not documented upstream.
+
+It also means round 34's design was flawed even though its assertion held.
+Prefill was presented as an untouched control; it was in fact the most heavily
+affected variable. The load assertion caught the *previous* error and this one
+slipped past it, because the check verified *that* a config loaded, not *which
+shapes it would capture*.
+
+### Decode, at a size that was tuned
+
+M=1 **is** in the config, and decode still lost 7.5%. So this is not only the
+clamping artefact — at least one genuinely tuned shape underperformed the
+shipped heuristic. The likely reason is that `benchmark_moe.py` times the MoE
+kernel in isolation, while the serving path runs it interleaved with attention,
+KV traffic and RCCL collectives on the same device; a tile that wins standalone
+need not win in that context.
+
+### What this says about `docs/33`
+
+`docs/33` measured decode selecting `16x16x16bf16_1k` at 191–196 MACs/instruction
+against 485–497 for the `32x32x8` tile larger shapes get, and read that as decode
+sitting on the wrong side of a 2.5× spread. **This round found no way to collect
+it.** The supported tuner, given the correct dtype and a real search, produced
+nothing that beats the heuristic at decode shapes.
+
+That is consistent with the spread describing a *ceiling reachable only at large
+M* rather than headroom available at M=1 — at M=1 a 32-row tile wastes 31/32 of
+the M dimension regardless of how it is configured. `docs/33`'s measurement
+stands; the inference that it represented recoverable decode headroom does not.
+
+### Worth trying, if someone returns to this
+
+- **Tune the full M range**, including 512–4096. Budget ~5 h/size above M=64 on
+  this hardware (§3), so this is an overnight job, and it is the only way to
+  find out whether the losses above are entirely the clamping artefact.
+- **Tune in situ.** A config selected by standalone kernel timing is not
+  obviously the one that wins under a live serving mix.
