@@ -1,0 +1,96 @@
+{
+  "label": "rd38-base",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 27852,
+  "actual_prompt_tokens": 25725,
+  "ttft_s_median": 3.7363116280175745,
+  "ttft_s_min": 3.73223063594196,
+  "ttft_s_max": 3.7422398789785802,
+  "implied_prefill_tps_median": 6879.302458565712,
+  "decode_tps_median": 56.578264147075274,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " it\u2014just comply exactly as told.\n\nOkay, I'm ready to send the reply. It's simple: \"ACKNOWLEDGED\".\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      58301009920,
+      58301009920
+    ],
+    "total_gb": 116.6
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      58301009920,
+      58301009920
+    ],
+    "total_gb": 116.6
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 3.73223063594196,
+      "total_s": 8.240565556916408,
+      "stream_tokens": 256,
+      "decode_tps": 56.561894794011074,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text provided is just padding that I should ignore.\n\nLet me count from 1 to 60:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI'll make sure to output just these numbers, one per line, with nothing else.\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10",
+      "usage": {
+        "prompt_tokens": 25725,
+        "total_tokens": 25981,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "ce01d9f576234013a2a452a7b6c20620",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785560625.329152,
+      "actual_prompt_tokens": 25725,
+      "implied_prefill_tps": 6892.660853341768
+    },
+    {
+      "ttft_s": 3.7363116280175745,
+      "total_s": 8.243342416943051,
+      "stream_tokens": 256,
+      "decode_tps": 56.578264147075274,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text above is described as \"padding\" that I should ignore.\n\nI'll simply count from 1 to 60, one number per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nThis is a straightforward counting task. I'll make sure to output exactly 60 lines with the numbers 1 through 60, one per line",
+      "usage": {
+        "prompt_tokens": 25677,
+        "total_tokens": 25933,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "323fd066824f414082806990e3f38bae",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785560633.5732627,
+      "actual_prompt_tokens": 25677,
+      "implied_prefill_tps": 6872.285439858718
+    },
+    {
+      "ttft_s": 3.7422398789785802,
+      "total_s": 8.245527805993333,
+      "stream_tokens": 256,
+      "decode_tps": 56.62527991664685,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text above is described as \"padding\" that I should ignore.\n\nSo I'll simply output the numbers 1 through 60, each on its own line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nThat's the count from 1 to 60, one number per line, as requested.\n</think>\n\n1\n2\n3\n",
+      "usage": {
+        "prompt_tokens": 25744,
+        "total_tokens": 26000,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "fc69eb7ab43042c3a650356b947815b1",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785560641.8202236,
+      "actual_prompt_tokens": 25744,
+      "implied_prefill_tps": 6879.302458565712
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 78.480608,
+    "kv_cache_gib": 36.36,
+    "kv_cache_tokens": 793520.0,
+    "graph_capture_gib": 5.51
+  }
+}

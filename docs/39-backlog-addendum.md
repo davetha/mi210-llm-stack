@@ -50,6 +50,11 @@ treated as permanently closed.
 the on-GPU interpreter's synchronisation layer breaks. The idea (fewer, larger,
 persistent kernels) is portable; the code is not.
 
+**UPDATE 2026-08-01**: run in round 38e (`docs/42`). Result: **99.9% kernel
+coverage** during graph-mode decode — launch/CPU share is 0.1%, the gap is
+in-kernel, and the eager-mode control measured 82% gap fraction (3.5× slower
+wall), so graph capture is what stands between this box and that fate.
+
 **The decomposition 1c says has never been done, concretely:**
 `rocprofv3 --kernel-trace --hip-trace` on decode steady-state (skip prefill and
 the first token). Sum of kernel durations vs wall clock gives the launch-bound
@@ -120,6 +125,10 @@ self-inflicted config.
 
 **A 20-minute test that is already scoped and has never run.** Serve the 70B arm
 at `--max-model-len 65536` and re-measure decode at 60k.
+
+**UPDATE 2026-08-01**: run in round 38 on the 30B (`docs/42`) — 131k vs 32k
+capture serving identical 27,852-token requests came out 0.986×, a null. No
+self-inflicted geometry tax; the gradient question is settled for this regime.
 
 ---
 
