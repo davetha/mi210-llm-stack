@@ -1,0 +1,20 @@
+{
+  "label": "rd38-async",
+  "serverlog_readable": true,
+  "any_asm": true,
+  "distinct_objects": 2,
+  "families": {
+    "fwd": 4
+  },
+  "objects": {
+    "fwd_hd128_bf16_causal_rtna_group.co": 2,
+    "fwd_hd128_bf16_rtna_group.co": 2
+  },
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 78.430893,
+    "kv_cache_gib": 35.81,
+    "kv_cache_tokens": 782288.0,
+    "graph_capture_gib": 5.51
+  }
+}

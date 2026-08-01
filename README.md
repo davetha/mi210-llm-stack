@@ -101,6 +101,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 - [`docs/38-serving-layer-and-structural-reduction.md`](docs/38-serving-layer-and-structural-reduction.md) — **`--load-format sharded_state` skips the loader entirely**, making the 7-hour load a one-time cost; why prefix caching is worth more here than on a GPU box; LMCache, REAP
 - [`docs/39-backlog-addendum.md`](docs/39-backlog-addendum.md) — backlog item **1c resized** (~3x, not 6.4x), **1b inverted** (W4A16-fp16 over W4A8-int8), item 2 cliff ruled out, plus DP=2 and low-bit allreduce
 - [`docs/40-the-three-collective-gates.md`](docs/40-the-three-collective-gates.md) — "no xGMI" never meant "no peer-to-peer": PCIe P2P measures **26.98 GB/s** against 14.16 staged, worth **+11.2% prefill** at TP=2, and the default is now on
+- [`docs/41-moe-tuning-mi210.md`](docs/41-moe-tuning-mi210.md) — MoE tuning on MI210: the tuner works after Andrei's fix, but a **partial tuned config is harmful** (0.79× prefill) — nearest-M matching has no fallback
+- [`docs/42-decode-gap-probes.md`](docs/42-decode-gap-probes.md) — round 38: clocks, capture geometry and launch overhead all **ruled out**; async scheduling is default-on and worth **1.11× decode** (masking a ~7% 0.26 regression); rocprofv3 shows **99.9% kernel coverage** — the ~3× decode gap is in-kernel
 
 ### Benchmarks
 - [`benchmarks/matrix/`](benchmarks/matrix/) — the quantization matrix: harness, sweeps, raw JSON, and [`REPRODUCE.md`](benchmarks/matrix/REPRODUCE.md) with exact tags, versions and CLI args
