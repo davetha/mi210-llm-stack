@@ -83,17 +83,39 @@ does not error — it just runs slow:
 3. Opens AITER's own gfx90a dispatch paths (~16 sites).
 4. Widens vLLM's `on_mi3xx()` attention gate to `on_gfx9()` (6 sites).
 
-Then apply the two performance patches:
+Then apply the performance patches, **in this order**:
 
 ```bash
-docker exec <container> python3 configs/prefer_aiter_fa_gfx90a.py   # ROCM_AITER_FA selectable
-docker exec <container> python3 configs/enable_int8_moe_rocm.py     # INT8 MoE on CDNA
+docker exec <container> python3 configs/prefer_aiter_fa_gfx90a.py     # ROCM_AITER_FA selectable
+docker exec <container> python3 configs/enable_int8_moe_rocm.py       # INT8 MoE on CDNA
+docker exec <container> python3 configs/enable_aiter_ck_gemm_gfx90a.py  # CK int8 GEMM -- 1.48x decode
 docker commit <container> rocm-vllm-aiter-gfx90a:latest
 ```
 
 `prefer_aiter_fa_gfx90a.py` is required for AITER to be **chosen**, not merely
 admitted — vLLM's backend list appends `ROCM_ATTN` first unconditionally and
 takes the first valid entry.
+
+`enable_aiter_ck_gemm_gfx90a.py` **must run after** the gate-widening step
+above, and asserts that rather than writing a broken file. It removes three
+independent blockers (`docs/43`): aiter's `GFX_CU_NUM_MAP` has no gfx90a entry
+so instance codegen raises and the build dies later on a missing generated
+header; `is_linear_enabled()` is `on_mi3xx()`-gated; and `register_ops_once()`
+is `on_mi3xx()`-gated too, which means **no AITER custom op is registered at
+all** on CDNA2 — the attention path never hit that because it calls aiter
+directly rather than through `torch.ops.vllm`.
+
+Verify the whole image before benchmarking it, on a machine with the cards:
+
+```bash
+docker run --rm --device /dev/kfd --device /dev/dri \
+  --security-opt seccomp=unconfined --group-add video \
+  --entrypoint /usr/local/bin/verify-gfx90a <image>
+```
+
+Check 7 is the one that matters for the GEMM: checks 1–6 all passed on an image
+where serving died at the first `qkv_proj`, because they exercise the attention
+path only.
 
 ## 3. Fetch models
 
@@ -130,10 +152,13 @@ The load-bearing entries, with verdicts:
 | Variable | Value | Verdict on gfx90a |
 |---|---|---|
 | `HSA_NO_SCRATCH_RECLAIM` | `1` | **Required.** AMD documents 5-10x latency win on MI200. Not the default. |
-| `NCCL_P2P_DISABLE` | `1` | **Required for TP.** No xGMI here; RCCL otherwise stalls probing for P2P. |
+| `NCCL_P2P_DISABLE` | `0` | **CORRECTED 2026-07-31.** This table previously said `1`, "required for TP, no xGMI here". The premise is true and the conclusion is false: the driver advertises a PCIe P2P link, a device-to-device copy measures **26.98 GB/s** against 14.16 staged through host memory, and enabling it is worth **+11.2% prefill / −10.3% TTFT** at TP=2 (round 31, `docs/40`). Set it back to `1` only if collective setup hangs, and say so in the run label. |
 | `GPU_MAX_HW_QUEUES` | `4` | Stated explicitly so it is recorded, not inherited. |
-| `VLLM_PREFER_AITER_FA` | `1` | Makes AITER FA selected rather than merely available. |
+| `VLLM_PREFER_AITER_FA` | `1` | Makes AITER FA **selected** rather than merely available. Worth **1.19–1.33× prefill** (round 37). Candidacy is not selection — `_get_backend_priorities()` appends `ROCM_ATTN` first. |
+| `VLLM_ROCM_USE_AITER_LINEAR` | `1` | **The largest single win: 1.48× decode** at TP=2, 1.71× at TP=1 (round 40, `docs/43`). Routes int8 GEMM to AITER's CK kernel instead of vLLM's Triton fallback, which emits only 40 workgroups for qkv_proj on a 104-CU card at M=1. Requires `enable_aiter_ck_gemm_gfx90a.py`; **inert without it**. |
+| `VLLM_ROCM_USE_AITER_MOE` | `0` | Measured **0.977×** — it runs (`module_moe_asm` loads) but is a mild regression. `docs/45`. |
 | `VLLM_ROCM_USE_AITER` / `_MHA` | `1` | Only effective with the patches above. |
+| `VLLM_ROCM_USE_AITER_{TRITON_ROPE,UNIFIED_ATTENTION,CUSTOM_AR,TRITON_GEMM}` | *unset* | All four **cannot engage** on this stack, each for a different reason. `docs/45`. |
 | `HIP_FORCE_DEV_KERNARG` | *unset* | NO-EFFECT — gated on `isGfx94x`, already defaults to 1. |
 | `VLLM_USE_TRITON_FLASH_ATTN` | *unset* | REMOVED from current vLLM. |
 | `VLLM_USE_V1` | *unset* | REMOVED; V1 is the only architecture. |
