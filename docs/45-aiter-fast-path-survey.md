@@ -215,3 +215,56 @@ of allocation per row, carries no correctness risk, and targets
 everything above. **Untested.** It is the only MoE idea left that is not
 "write a kernel", and unlike the AITER flags it has upstream evidence behind
 it.
+
+## Round 44: INT8 MoE stride padding — tested, not a win
+
+The idea from the section above, measured (`round44_moe_padding.sh`,
+`configs/enable_moe_padding_int8_rocm.py`).
+
+**The patch does exactly what it should.** Loading the served model in both
+images and reading the real strides:
+
+| tensor | shape | control stride | padded stride |
+|---|---|---|---|
+| `w13` | `(128, 1536, 2048)` | `(3145728, 2048, 1)` | `(3538944, **2304**, 1)` |
+| `w2` | `(128, 2048, 768)` | `(1572864, 768, 1)` | `(1572864, 768, 1)` |
+
+`w13`'s row stride moves 2048 → 2304 B (+256) with the logical shape
+unchanged; `w2` is correctly untouched, since 768 B is not a multiple of 512
+and fails the upstream guard. Nothing re-tightens it — the round gates on this
+and would have aborted rather than benchmark an image against itself.
+
+**The result:**
+
+| workload | metric | no pad | padded | factor |
+|---|---|---:|---:|---:|
+| longctx | **decode** | 85.16 | 81.87 | **0.961×** |
+| longctx | prefill | 6984.04 | 6968.81 | 0.998× |
+| longctx | ttft | 3.69 | 3.69 | 1.001× |
+| cold16k | prefill | 8551.01 | 8541.48 | 0.999× |
+
+**How much to read into the 0.961×.** Not much, and the reason is in our own
+data. Four measurements of the *unpadded* configuration on essentially this
+stack:
+
+    rd40-ck        82.48
+    rd42-baseline  82.92
+    rd44-nopad     85.16   <- the control this round measured against
+    rd44-pad       81.87
+
+The control is the highest of the three unpadded runs, and the padded arm falls
+inside their spread. Prefill and TTFT were reproducible to 0.1% across the same
+runs, so **decode is the noisy metric on this rig, at roughly ±3%** — which is
+the same size as the effect being claimed.
+
+So: **padding is not a win.** If it helped, it would land above a control, not
+below one. Whether it mildly *hurts* is not established and was not chased,
+because both readings lead to the same action — do not ship it. The patch
+script stays in `configs/` for reproducibility and is **not** wired into
+`Dockerfile.vllm-mi210`.
+
+**What would change the verdict:** coverage. Only `w13` qualifies, so about half
+the expert bytes moved. Upstream's ~10% figure is Mixtral, unquantized, TP=8,
+batch 64 — a throughput regime, not batch-1 decode. A model whose `w2` also
+satisfied the 512 B stride rule, or a high-concurrency workload, is a different
+experiment and this result does not close it.
