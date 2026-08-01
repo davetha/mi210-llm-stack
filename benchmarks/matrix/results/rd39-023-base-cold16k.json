@@ -1,0 +1,99 @@
+{
+  "label": "rd39-023-base",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15145,
+  "ttft_s_median": 1.8775617920327932,
+  "ttft_s_min": 1.8558520069345832,
+  "ttft_s_max": 2.408291653962806,
+  "implied_prefill_tps_median": 8091.877489449168,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " not adding any thoughts or fluff, just doing what's asked. So, my response will be: ACKNOWLEDGED\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      63608610816,
+      63608623104
+    ],
+    "total_gb": 127.22
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      63620485120,
+      63620493312
+    ],
+    "total_gb": 127.24
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 2.408291653962806,
+      "total_s": 2.523442843928933,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15145,
+        "total_tokens": 15153,
+        "completion_tokens": 8
+      },
+      "rep": 0,
+      "marker": "af286764394a4212bb3e224c01e78367",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785566073.6545312,
+      "actual_prompt_tokens": 15145,
+      "implied_prefill_tps": 6288.690148919107,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 1.8558520069345832,
+      "total_s": 1.9714942140271887,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15061,
+        "total_tokens": 15069,
+        "completion_tokens": 8
+      },
+      "rep": 1,
+      "marker": "a986e44857934bee95c829794c5b9f6d",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785566076.1801865,
+      "actual_prompt_tokens": 15061,
+      "implied_prefill_tps": 8115.410034702667,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 1.8775617920327932,
+      "total_s": 1.99258328799624,
+      "stream_tokens": 8,
+      "decode_tps": null,
+      "text": "<think>\nThe user has provided a very",
+      "usage": {
+        "prompt_tokens": 15193,
+        "total_tokens": 15201,
+        "completion_tokens": 8
+      },
+      "rep": 2,
+      "marker": "be2ad93d088d4bf29db59e87041ed785",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785566078.153811,
+      "actual_prompt_tokens": 15193,
+      "implied_prefill_tps": 8091.877489449168,
+      "decode_tps_note": "suppressed: only 8 tokens generated, need >=32 for a meaningful rate"
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 59.385526,
+    "kv_cache_gib": 41.3,
+    "kv_cache_tokens": 902160.0,
+    "graph_capture_gib": 5.54
+  }
+}

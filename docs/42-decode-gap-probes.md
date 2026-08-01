@@ -1,19 +1,24 @@
-# Round 38: three nulls, one masked regression, and the decode gap is in-kernel
+# Rounds 38–39: three nulls, a same-day retraction, and the decode gap is in-kernel
 
-**Date**: 2026-08-01 · Model: Qwen3-30B-A3B W8A8 · Image: `vllm-mi210:v0.26.1rc0`
-· TP=2, P2P on, AITER FA on, tuned MoE config off · Scripts:
+**Date**: 2026-08-01 · Model: Qwen3-30B-A3B W8A8 · Images: `vllm-mi210:v0.26.1rc0`
+(rounds 38/38b/38e), `vllm-mi210:latest` = 0.23.1 (round 39) · TP=2, P2P on,
+AITER FA on, tuned MoE config off · Scripts:
 `benchmarks/matrix/round38_decode_gap.sh`, `round38b_noasync.sh`,
-`round38e_profile.sh` · Results: `benchmarks/matrix/results/rd38-*.json`
+`round38e_profile.sh`, `round39_async_023.sh` · Results:
+`benchmarks/matrix/results/rd38-*.json`, `rd39-*.json`
 
 `docs/39` re-derived batch-1 decode as ~3.1× off its bandwidth bound and scoped
 a profiling decomposition that had never been run. Before running it, three
 config-only suspects had zero measurements anywhere in this repo. This round
 measured all four things. Headline: **the three cheap suspects are nulls, the
 decomposition finally ran, and it puts the gap in-kernel — 99.9% kernel
-coverage during decode under graph capture.** Along the way it surfaced one
-finding with a number attached: async scheduling is default-on in 0.26 and is
-worth **1.110×** on decode, which means the rest of 0.26's decode path
-regressed against 0.23.1 and the default masked it.
+coverage during decode under graph capture.** Along the way it measured async
+scheduling — default-on in both shipped versions — at **1.064×** (0.23.1) to
+**1.110×** (0.26.1rc0) on decode. An earlier revision of this document
+concluded from that number that 0.26's synchronous path had regressed and the
+default masked it; §2 retracts that claim with the measurement that refutes
+it. This document is rounds 38 and 39 together, kept as one record including
+the wrong turn.
 
 ## 1. The four arms
 
@@ -81,27 +86,40 @@ shows async enabled):
 shipped images already have it. Nothing to change in production; the number
 matters for attribution.
 
-### The regression it masks
+### The regression it masks — RETRACTED, same day (round 39)
 
-`docs/28`-era measurements and round 36's sweep put the whole 0.23.1 →
-0.26.1rc0 climb at 1.7–2.9%. But 0.23.1 *had no async scheduling*. Same
-workload, same tokens:
+The original text of this section claimed 0.26's synchronous decode path was
+~0.92–0.94× of 0.23.1's, a 6–8% regression masked by async scheduling, on the
+premise that "0.23.1 *had no async scheduling*." **The premise is false.**
+`async_scheduling: bool | None = None` exists in v0.23.1rc0 with the same
+resolution to enabled, and round 36's serverlogs — checked only after the
+claim shipped — say "Asynchronous scheduling is enabled" in **all three**
+version arms. The arithmetic compared 0.23.1 *with* async against 0.26
+*without* it and called the difference a version regression.
 
-| configuration | longctx decode |
-|---|---:|
-| 0.23.1 (round 36, P2P off) | 54.11 t/s |
-| 0.26.1rc0, async OFF (38b, P2P on) | 50.96 |
-| 0.26.1rc0, async ON (38, P2P on) | 56.58 |
+Round 39 measured the cell that comparison was missing (0.23.1, async off;
+`round39_async_023.sh`, pins identical to rounds 38/38b, async state asserted
+from the serverlog per arm):
 
-Caveats first: cross-round, and round 36 ran P2P off — but round 31 measured
-decode's P2P sensitivity at +1.3% (noise), and the max-len difference is the
-geometry null above. With those bounds, **0.26's synchronous decode path is
-~0.92–0.94× of 0.23.1's** — a 6–8% regression that async scheduling's +11%
-turned into the +2–3% round 36 reported. Version sweeps that only measure
-end-to-end miss compensating pairs like this; locating the regression (300+
-commits, most touching the scheduler and model runner) is a lead, but a weak
-one — its ceiling is recovering single-digit percent that async already papers
-over.
+| version | async ON | async OFF | ON/OFF |
+|---|---:|---:|---:|
+| 0.23.1 | 54.64 | 51.36 | 1.064× |
+| 0.26.1rc0 | 56.58 | 50.96 | 1.110× |
+
+Sync path across versions: **0.992×** — dead center of the ±2–3% noise floor.
+Async-on across versions: 1.035×. **There is no regression, masked or
+otherwise.** The synchronous path is flat from 0.23.1 to 0.26.1rc0; the async
+*implementation* got somewhat more effective (1.064× → 1.110×, plausibly the
+#28250 scheduling-config rework); flat sync plus better async is exactly the
++2.7% round 36 reported end-to-end. What survives of this section: async
+scheduling is worth 6–11% on this box, both versions ship it enabled, and a
+version sweep's end-to-end number can still hide compensating pairs — this
+one just didn't contain one.
+
+The method failure is worth naming precisely: the original claim rested on a
+*remembered* property of 0.23.1 ("had no async") that one grep of an existing
+serverlog would have falsified. Verified: the claim survived less than two
+hours.
 
 ## 3. The decomposition: 99.9% kernel coverage — the gap is in-kernel
 
@@ -179,6 +197,6 @@ subprocess output. The ephemeral in-container patch is generated by
 | Capture-geometry decode tax (docs/39 §2) | **Closed** — 0.986×, same-workload A/B |
 | `--async-scheduling` as a new win | **Closed** — already default-on; worth 1.110× and already banked |
 | Launch overhead at batch-1 decode | **Closed** — 0.1% gap fraction under graphs |
-| 0.26 synchronous-path decode regression | **Open, weak** — ~6–8%, masked by async; ceiling is single digits |
+| 0.26 synchronous-path decode regression | **Refuted** — round 39: sync path 0.992× across versions; see the §2 retraction |
 | In-kernel efficiency of `scaled_mm` / `fused_moe` | **Open, and now the only game in town** for the ~3× — via docs/39 1b (W4A16 audit) and docs/30 instruction work |
 | Spec-decode re-run condition (docs/39 1c) | Unchanged — the 3× persists; it is in-kernel, so the "re-run after the gap closes" trigger has not fired |
