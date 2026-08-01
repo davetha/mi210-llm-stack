@@ -57,6 +57,13 @@ FROM ${BASE}
 ARG VLLM_REF=v0.26.0
 ARG AITER_TAG=v0.1.19
 ARG BUILD_JOBS=20
+# Set to 1 to build a vLLM whose requirements/cuda.txt names a different torch
+# than this image has. That pin is NOT a ROCm requirement -- requirements/
+# rocm.txt pins no torch at all -- so it states what upstream tests against on
+# NVIDIA, not what the code needs here. Overriding it is a deliberate
+# experiment: the build may still fail on a genuinely missing torch API, which
+# is the useful answer, and is cheaper to obtain than a torch source build.
+ARG ALLOW_TORCH_MISMATCH=0
 
 ENV GPU_ARCHS=gfx90a \
     PYTORCH_ROCM_ARCH=gfx90a \
@@ -82,10 +89,19 @@ RUN set -eux; \
     want="$(grep -oE '^torch==[0-9.]+' /src/vllm/requirements/cuda.txt | head -1 | cut -d= -f3)"; \
     have="$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')"; \
     echo "vLLM ${VLLM_REF} wants torch ${want}; image has ${have}"; \
-    [ "${want}" = "${have}" ] || { \
-      echo "FATAL: torch mismatch. ${VLLM_REF} targets ${want}, this image has ${have}." >&2; \
-      echo "       No torch ${want} exists for ROCm unless AMD has shipped one." >&2; \
-      exit 1; }
+    if [ "${want}" != "${have}" ]; then \
+      if [ "${ALLOW_TORCH_MISMATCH}" = "1" ]; then \
+        echo "WARNING: torch mismatch accepted by ALLOW_TORCH_MISMATCH=1."; \
+        echo "         ${VLLM_REF}'s cuda.txt names ${want}; this image has ${have}."; \
+        echo "         rocm.txt pins no torch, so this may build fine. If it does"; \
+        echo "         not, the failure will be a missing torch symbol or API."; \
+      else \
+        echo "FATAL: torch mismatch. ${VLLM_REF} targets ${want}, image has ${have}." >&2; \
+        echo "       That pin lives in cuda.txt and is NOT a ROCm requirement." >&2; \
+        echo "       Rebuild with --build-arg ALLOW_TORCH_MISMATCH=1 to try anyway." >&2; \
+        exit 1; \
+      fi; \
+    fi
 
 # --- 2. AITER from source ---------------------------------------------------
 RUN --mount=type=cache,target=/ccache,sharing=locked \
