@@ -107,7 +107,10 @@ from the serverlog per arm):
 | 0.26.1rc0 | 56.58 | 50.96 | 1.110× |
 
 Sync path across versions: **0.992×** — dead center of the ±2–3% noise floor.
-Async-on across versions: 1.035×. **There is no regression, masked or
+Async-on across versions: 1.035× — which `docs/46` later measured to be
+*inside* the decode noise floor (bar 1.036×), so it demonstrates no version
+difference either way. The sync-path 0.992× is flat on any reading.
+**There is no regression, masked or
 otherwise.** The synchronous path is flat from 0.23.1 to 0.26.1rc0; the async
 *implementation* got somewhat more effective (1.064× → 1.110×, plausibly the
 #28250 scheduling-config rework); flat sync plus better async is exactly the

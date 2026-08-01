@@ -128,11 +128,72 @@ this document.**
 
 ---
 
-## Track 2 — the noise floor
+## Track 2 — the noise floor, measured
 
-See the section appended below once `round45_noise_floor.sh` completes; it runs
-the identical configuration five times through separate server launches and
-reports mean, stdev, and the smallest A/B ratio that clears 95% confidence.
+Five runs of the **identical** configuration through **separate server
+launches** — which is what an A/B arm actually is, since each arm relaunches.
+`bench_matrix.py` already medians 3 reps inside one server, so this measures
+the variance that survives that.
+
+| metric | n | mean | stdev | CV | spread | **95% bar** |
+|---|---:|---:|---:|---:|---:|---:|
+| **decode t/s** | 5 | 82.66 | 1.073 | **1.30%** | 3.16% | **1.036×** |
+| longctx prefill | 5 | 6979.13 | 11.35 | 0.16% | 0.38% | 1.005× |
+| longctx ttft | 5 | 3.69 | 0.002 | 0.06% | 0.15% | 1.002× |
+| cold16k prefill | 5 | 8562.13 | 6.28 | 0.07% | 0.16% | 1.002× |
+| cold16k ttft | 5 | 1.77 | 0.004 | 0.25% | 0.61% | 1.007× |
+
+The last column is the smallest ratio a **single-arm A/B** must exceed to mean
+anything at 95% confidence, given two independent launches (sd of a difference
+is √2·σ).
+
+**Decode is ~8× noisier than prefill.** That single fact explains the shape of
+this project's results: every prefill finding has replicated across rounds,
+while several decode findings have wobbled.
+
+### Retroactive audit — what survives
+
+| result | metric | ratio | verdict |
+|---|---|---:|---|
+| CK int8 GEMM | decode | 1.480 | **SURVIVES** |
+| async scheduling | decode | 1.110 | **SURVIVES** |
+| AITER FA (decode) | decode | 1.076 | **SURVIVES** |
+| AITER FA @25k | prefill | 1.332 | **SURVIVES** |
+| AITER FA @16k | prefill | 1.190 | **SURVIVES** |
+| PCIe P2P | prefill | 1.112 | **SURVIVES** |
+| MoE stride padding | decode | 1.041 | BORDERLINE |
+| **vLLM 0.23.1 → 0.26.1rc0** | decode | **1.035** | **INCONCLUSIVE — inside noise** |
+| clock pinning | decode | 1.033 | inconclusive (was reported null — consistent) |
+| AITER MoE | decode | 1.024 | inconclusive (was called a mild regression) |
+| capture geometry 131k/32k | decode | 1.014 | inconclusive (was reported null — consistent) |
+
+**Three corrections follow, and one vindication.**
+
+1. **The version-climb number is retracted as a measurement.** `docs/42` and
+   `benchmarks/README.md` both carry "vLLM 0.23.1 → 0.26.1rc0: 1.035× decode".
+   The bar is 1.036×. It is inside the noise and must be read as *no
+   demonstrated decode difference*, not as a small gain. (Round 39's
+   **sync-path** comparison at 0.992× was always described as flat, and that
+   reading is unaffected.)
+2. **AITER MoE's 0.977× is inconclusive**, not a mild regression. `docs/45`
+   hedged it as "sitting at the ±2–3% noise floor", which was the right
+   instinct; it is now quantified. The *reason* MoE is closed — the flag never
+   reaches the ASM kernels, round 43's kernel diff — does not depend on the
+   throughput number at all, so the closure stands.
+3. **Every null reported as a null is confirmed as one.** Clock pinning and
+   capture geometry both land inside the interval, exactly as they were
+   reported.
+4. **Round 44's refusal to call stride padding a regression was correct.** At
+   1.041× it only just clears the bar, and its control was the 85.16 outlier —
+   which now sits outside this five-run cluster entirely (81.38–83.99). Had it
+   been called a regression, this round would be retracting that too.
+
+### The rule going forward
+
+A decode A/B on this rig needs **>1.036×** to be reportable from a single pair
+of arms. Below that, either run repetitions or report it as inconclusive.
+Prefill and TTFT need only ~1.005×, which is why they carry the load in every
+solid result here.
 
 ---
 
