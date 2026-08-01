@@ -1,0 +1,16 @@
+{
+  "label": "rd40-ck",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "status": "FAILED",
+  "reason": "container exited during load",
+  "server_log_tail": "(APIServer pid=1)     return func(*args, **kwargs)\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/v1/engine/core_client.py\", line 139, in make_async_mp_client\n(APIServer pid=1)     return AsyncMPClient(*client_args)\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/tracing/otel.py\", line 178, in sync_wrapper\n(APIServer pid=1)     return func(*args, **kwargs)\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/v1/engine/core_client.py\", line 978, in __init__\n(APIServer pid=1)     super().__init__(\n(APIServer pid=1)     ~~~~~~~~~~~~~~~~^\n(APIServer pid=1)         asyncio_mode=True,\n(APIServer pid=1)         ^^^^^^^^^^^^^^^^^^\n(APIServer pid=1)     ...<3 lines>...\n(APIServer pid=1)         client_addresses=client_addresses,\n(APIServer pid=1)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=1)     )\n(APIServer pid=1)     ^\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/v1/engine/core_client.py\", line 588, in __init__\n(APIServer pid=1)     with launch_core_engines(\n(APIServer pid=1)          ~~~~~~~~~~~~~~~~~~~^\n(APIServer pid=1)         vllm_config, executor_class, log_stats, addresses\n(APIServer pid=1)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=1)     ) as (engine_manager, coordinator, addresses, tensor_queue):\n(APIServer pid=1)     ^\n(APIServer pid=1)   File \"/root/.local/share/uv/python/cpython-3.14.6-linux-x86_64-gnu/lib/python3.14/contextlib.py\", line 148, in __exit__\n(APIServer pid=1)     next(self.gen)\n(APIServer pid=1)     ~~~~^^^^^^^^^^\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/v1/engine/utils.py\", line 1210, in launch_core_engines\n(APIServer pid=1)     wait_for_engine_startup(\n(APIServer pid=1)     ~~~~~~~~~~~~~~~~~~~~~~~^\n(APIServer pid=1)         handshake_socket,\n(APIServer pid=1)         ^^^^^^^^^^^^^^^^^\n(APIServer pid=1)     ...<6 lines>...\n(APIServer pid=1)         coordinator.proc if coordinator else None,\n(APIServer pid=1)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=1)     )\n(APIServer pid=1)     ^\n(APIServer pid=1)   File \"/opt/python/lib/python3.14/site-packages/vllm/v1/engine/utils.py\", line 1269, in wait_for_engine_startup\n(APIServer pid=1)     raise RuntimeError(\n(APIServer pid=1)     ...<3 lines>...\n(APIServer pid=1)     )\n(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}\n",
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 60.122303,
+    "kv_cache_gib": 35.9,
+    "kv_cache_tokens": 784208.0,
+    "graph_capture_gib": 5.51
+  }
+}

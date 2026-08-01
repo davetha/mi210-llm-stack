@@ -25,7 +25,16 @@ docker run -d --name "$NAME" \
   -e HSA_NO_SCRATCH_RECLAIM=1 -e GPU_MAX_HW_QUEUES=4 \
   -e NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-0}" \
   -e VLLM_ROCM_USE_AITER=1 -e VLLM_ROCM_USE_AITER_MHA=1 \
-  -e VLLM_ROCM_USE_AITER_LINEAR=0 -e VLLM_ROCM_USE_AITER_MOE=0 \
+  `# Overridable, defaulting OFF -- same reason VLLM_IMAGE above is. These` \
+  `# were hardcoded to 0, which would have made a CK-GEMM A/B run two` \
+  `# IDENTICAL Triton arms and report the null as a measurement. That exact` \
+  `# failure has now happened three times in this project (VLLM_IMAGE in` \
+  `# round 31, NCCL_P2P_DISABLE in round 32, VLLM_PREFER_AITER_FA in round` \
+  `# 37), every time by a hardcode in an arm-launch path. Default stays 0:` \
+  `# both need configs/enable_aiter_ck_gemm_gfx90a.py applied, and on an` \
+  `# image without it the flags are dead anyway.` \
+  -e VLLM_ROCM_USE_AITER_LINEAR="${VLLM_ROCM_USE_AITER_LINEAR:-0}" \
+  -e VLLM_ROCM_USE_AITER_MOE="${VLLM_ROCM_USE_AITER_MOE:-0}" \
   -e VLLM_TUNED_CONFIG_FOLDER=${VLLM_TUNED_CONFIG_FOLDER:-} \
   -e AITER_LOG_LEVEL=info -e VLLM_PREFER_AITER_FA=${VLLM_PREFER_AITER_FA:-0} \
   -e VLLM_PLUGINS= \

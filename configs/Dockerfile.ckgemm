@@ -1,0 +1,4 @@
+FROM vllm-mi210:v0.26.1rc0
+COPY enable_aiter_ck_gemm_gfx90a.py /opt/mi210/enable_aiter_ck_gemm_gfx90a.py
+RUN python3 /opt/mi210/enable_aiter_ck_gemm_gfx90a.py \
+ && python3 /opt/mi210/enable_aiter_ck_gemm_gfx90a.py --assert-patched
