@@ -19,6 +19,11 @@ repatcher produces, only `fmha_v3_fwd`'s 48 are reachable — `pa`, `mla`, `fmoe
 `topksoftmax` and `allreduce_*` are each unreachable for a *different* reason
 (§5). A fork would be 190 dead binaries and four small source edits.
 
+`docs/46` later quantified those 190: **138 of them are `fmha_v3_bwd`**, the
+flash-attention *backward* pass, which vLLM never calls because inference runs
+no backward pass. So the useful yield is 48 of 242, and more than half of the
+remainder was never inference code at all.
+
 **Patch scripts fail louder than forks do.** Every script here asserts on its
 expected match count and refuses to double-apply. When upstream moves the code,
 the build dies with "expected the gfx9 128k anchor exactly once in rocm.py,
@@ -498,7 +503,7 @@ them cost real time to establish.
 | family | objects | why it never runs |
 |---|---:|---|
 | `fmha_v3_fwd` | 48 | ✅ **runs** — the only one |
-| `pa` | 8 | **No call site.** `pa_fwd_asm` appears 6× in vLLM 0.23.1, none of them a call. The kernels are fine: 48/48 configs numerically exact, 0 failures on re-run. |
+| `pa` | 8 | **CORRECTED (`docs/46`): there IS a call site.** `rocm_aiter_ops.pa_fwd_asm` has no direct callers — which is what produced this claim — but the live route is `rocm_aiter_fa.py:1318` → `paged_attention_common()` → `pa_fwd_asm`. It still cannot fire here: it needs `VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT=1`, `head_size == 128` (production's Qwen3-Next-80B is **256**), and `num_seqs * num_heads > 2*CU` = **>208**, which batch-1 decode (1×32) never reaches. Kernels themselves are fine: 48/48 configs numerically exact. |
 | `mla` | 11 | **Flag inert.** `VLLM_ROCM_USE_AITER_MLA` 1 vs 0 → 8,630.8/93.34 vs 8,660.9/93.56. vLLM logs `Using FLASH_ATTN MLA` either way. |
 | `fmoe` | 8 | **PARTLY SUPERSEDED (round 42, `docs/45`).** With the gates carved out, `VLLM_ROCM_USE_AITER_MOE=1` *does* run — the server loads `module_moe_asm` and serves correctly — so "the kernel declines the device" is wrong as stated. It is simply not faster here: **0.977× decode**. The second clause still stands and is the likely reason: the 8 gfx90a objects are `noquant{Fp16,Bf16}` and cannot consume quantized weights. |
 | `topksoftmax` | 22 | **TESTED (round 43, `docs/45`). Right conclusion, wrong reason.** The "<1%" estimate is wrong — `topkGating` is **4.9% of decode** — and 22/22 objects port. But the dispatch rides on `is_fused_moe_enabled()`, and enabling it swaps one `vllm::moe::` topk kernel for another at the same price (388.5 → 386.8 ms). These ASM objects are never reached through vLLM's path. |
