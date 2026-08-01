@@ -141,6 +141,35 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
     python3 -m pip install --no-build-isolation -v . 2>&1 | tail -30; \
     python3 -c 'import vllm; print("built vllm", vllm.__version__)'
 
+# --- 4b. undo the tensorizer downgrade the vLLM install causes --------------
+#
+# `pip install .` from vLLM source drags tensorizer DOWN from the 2.12.1 the AMD
+# image ships to 2.10.1, and 2.10.1 does not import under this image's Python
+# 3.14:
+#
+#   File "tensorizer/_crypt/_encryption.py", line 367, in __new__
+#   KeyError: 'crypto_stream_salsa20_NONCEBYTES'
+#
+# The consequence is not a missing feature. vLLM's model registry inspects
+# architectures in a SUBPROCESS (registry.py:1454), that subprocess imports
+# tensorizer, and the KeyError kills it -- so every model load dies with
+#
+#   Model architectures ['Qwen3MoeForCausalLM'] failed to be inspected
+#
+# which names neither tensorizer nor the real error, because the subprocess's
+# stderr is discarded. Round 36 lost two arms to this AFTER both images passed
+# verify-gfx90a, since that script never loads a model.
+#
+# Same shape as the triton 3.7.1 restore above: a transitive downgrade, not an
+# intentional pin. tensorizer is unused here in any case -- docs/34 records it
+# as CUDA/S3-oriented with no verified ROCm path.
+RUN set -eux; \
+    python3 -m pip install --quiet 'tensorizer==2.12.1'; \
+    python3 -c 'import tensorizer; print("tensorizer", tensorizer.__version__)'; \
+    python3 -m vllm.model_executor.models.registry </dev/null 2>&1 | tail -2 || true; \
+    python3 -c 'from vllm.model_executor.models.registry import ModelRegistry; \
+print("registry import OK")'
+
 # --- 5. re-apply the Python-side patches to the NEW install -----------------
 #
 # Step 4 replaced site-packages/vllm wholesale, so anything patched before it
