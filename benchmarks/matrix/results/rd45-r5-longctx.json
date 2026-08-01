@@ -1,0 +1,96 @@
+{
+  "label": "rd45-r5",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 27852,
+  "actual_prompt_tokens": 25832,
+  "ttft_s_median": 3.6901641759322956,
+  "ttft_s_min": 3.6849720960017294,
+  "ttft_s_max": 3.694203647086397,
+  "implied_prefill_tps_median": 6992.100830712036,
+  "decode_tps_median": 82.36378113855943,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": " all caps as specified.\n\nOkay, final decision: keep it clean and simple. One word, no variations.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      57797402624,
+      57797402624
+    ],
+    "total_gb": 115.59
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      57797443584,
+      57797443584
+    ],
+    "total_gb": 115.59
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 3.6849720960017294,
+      "total_s": 6.7809119309531525,
+      "stream_tokens": 256,
+      "decode_tps": 82.36594437277545,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The instruction says to ignore the long text that appears to be padding.\n\nI'll simply count from 1 to 60, one number per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13",
+      "usage": {
+        "prompt_tokens": 25832,
+        "total_tokens": 26088,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "11f45ecf4cf34434b6cf2d67b79f3f08",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785625650.7032442,
+      "actual_prompt_tokens": 25832,
+      "implied_prefill_tps": 7010.09378823472
+    },
+    {
+      "ttft_s": 3.6901641759322956,
+      "total_s": 6.789017535978928,
+      "stream_tokens": 256,
+      "decode_tps": 82.2884820558176,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text above is described as \"padding\" and I should ignore it.\n\nI'll simply output the numbers 1 through 60, one per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n1",
+      "usage": {
+        "prompt_tokens": 25802,
+        "total_tokens": 26058,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "e168ddaac08241b3a0be1005f94c3e83",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785625657.4875863,
+      "actual_prompt_tokens": 25802,
+      "implied_prefill_tps": 6992.100830712036
+    },
+    {
+      "ttft_s": 3.694203647086397,
+      "total_s": 6.790224835043773,
+      "stream_tokens": 256,
+      "decode_tps": 82.36378113855943,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The instruction says to ignore the long text that appears to be padding.\n\nI'll simply count from 1 to 60, one number per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13",
+      "usage": {
+        "prompt_tokens": 25777,
+        "total_tokens": 26033,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "349c88d4f1134a528580bf80fdba8634",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785625664.2799516,
+      "actual_prompt_tokens": 25777,
+      "implied_prefill_tps": 6977.6878760677455
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 60.111661,
+    "kv_cache_gib": 35.9,
+    "kv_cache_tokens": 784208.0,
+    "graph_capture_gib": 5.51
+  }
+}

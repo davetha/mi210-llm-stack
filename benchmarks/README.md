@@ -28,7 +28,11 @@ Rounds 31–42; full method in `docs/40`–`docs/45`.
 | **PCIe P2P** (`NCCL_P2P_DISABLE=0`) | prefill | **1.112×** | 31 · `docs/40` |
 | **Async scheduling** (default-on in ≥0.26) | decode | **1.110×** | 38b · `docs/42` |
 | **256k paged attention** (patched gfx9 gate) | decode @205k | **13.08×** | — · `docs/36` |
-| vLLM 0.23.1 → 0.26.1rc0 | decode | 1.035× | 36 · `docs/42` |
+| ~~vLLM 0.23.1 → 0.26.1rc0~~ | decode | ~~1.035×~~ **inside noise** | 36 · `docs/46` |
+
+**The decode noise floor is 1.036×** (5 identical runs, `docs/46`). Any
+decode row above must clear it; the version-climb row does not, and is struck
+out. Prefill and TTFT need only ~1.005×.
 
 **Read the gains as independent, not cumulative.** Each row is a single-variable
 A/B against a baseline that already had the *other* optimizations on. The
