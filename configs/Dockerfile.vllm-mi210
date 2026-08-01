@@ -84,6 +84,7 @@ COPY configs/repatch_gfx942_to_gfx90a.py \
      configs/enable_int8_moe_rocm.py \
      configs/enable_sharded_state_tp_check.py \
      configs/prefer_aiter_fa_gfx90a.py \
+     configs/enable_aiter_ck_gemm_gfx90a.py \
      /opt/mi210/
 
 # --- 1. AITER v0.1.19 from source ------------------------------------------
@@ -223,6 +224,33 @@ RUN set -eux; \
 RUN set -eux; \
     python3 /opt/mi210/enable_sharded_state_tp_check.py; \
     python3 /opt/mi210/enable_sharded_state_tp_check.py --assert-patched
+
+# --- 4d. the AITER CK int8 GEMM: the largest single win measured here -------
+#
+# Worth 1.480x DECODE at TP=2 (55.71 -> 82.48 t/s) and 1.708x at TP=1, on the
+# 30B W8A8 arm. Full result and mechanism in docs/43; the short version is that
+# vLLM's generic Triton int8 GEMM emits 40 workgroups for qkv_proj and 16 for
+# o_proj on a 104-CU card at M=1, leaving most of the GPU idle every decode
+# step, while AITER's CK instance emits 80 and 32.
+#
+# Three gates had to come off, none of them hardware: aiter's GFX_CU_NUM_MAP
+# has no gfx90a entry (so instance codegen raises and the build dies later on a
+# missing generated header), is_linear_enabled() is on_mi3xx()-gated, and
+# register_ops_once() is on_mi3xx()-gated too -- so no aiter custom op is
+# registered at all on CDNA2 and torch.ops.vllm.rocm_aiter_w8a8_gemm does not
+# exist.
+#
+# MUST run after enable_vllm_aiter_gfx90a.py (step 4): it reuses the
+# is_aiter_attention_supported predicate that script inserts, and asserts as
+# much rather than writing a subtly broken file.
+#
+# INERT WITHOUT THE FLAGS. Serving must set VLLM_ROCM_USE_AITER=1 and
+# VLLM_ROCM_USE_AITER_LINEAR=1; a run with the patch and without the flags is
+# measuring the Triton kernel. verify_gfx90a_image.sh check 7 proves the op is
+# registered, which is the part that silently was not true the first time.
+RUN set -eux; \
+    python3 /opt/mi210/enable_aiter_ck_gemm_gfx90a.py; \
+    python3 /opt/mi210/enable_aiter_ck_gemm_gfx90a.py --assert-patched
 
 # --- 5. extend ROCm paged attention to 256k, and rebuild _rocm_C -----------
 #

@@ -214,6 +214,49 @@ else
 fi
 
 echo
+echo "=== 7. the AITER CK int8 GEMM is reachable (registered AND selectable) ==="
+# Added after round 40, which shipped an image where checks 1-6 all passed and
+# serving still died at the first qkv_proj with
+#
+#   AttributeError: '_OpNamespace' 'vllm' object has no attribute
+#                   'rocm_aiter_w8a8_gemm'
+#
+# register_ops_once() carries @if_aiter_supported -> on_mi3xx(), so on CDNA2
+# NOT ONE aiter custom op is registered. Nothing above catches it: the ASM
+# attention path calls aiter directly rather than through torch.ops.vllm, so
+# every attention check passes on an image where the linear path cannot work.
+#
+# Both halves are checked because they fail independently -- the op can exist
+# while the gate refuses to select it, and vice versa. The flags are set here
+# deliberately: is_linear_enabled() reads them, and without them a perfectly
+# good image reports False.
+if out="$(env -u GPU_ARCHS VLLM_ROCM_USE_AITER=1 VLLM_ROCM_USE_AITER_LINEAR=1 \
+    python3 -c '
+import torch
+import vllm._aiter_ops as ao
+from vllm.model_executor.kernels.linear.scaled_mm.aiter import (
+    AiterInt8ScaledMMLinearKernel as K,
+)
+print("registered:", hasattr(torch.ops.vllm, "rocm_aiter_w8a8_gemm"))
+print("gate:", bool(ao.rocm_aiter_ops.is_linear_enabled()))
+print("selectable:", bool(K.is_supported()[0]))
+' 2>&1)"; then
+    if printf '%s' "${out}" | grep -q 'registered: True' \
+    && printf '%s' "${out}" | grep -q 'gate: True' \
+    && printf '%s' "${out}" | grep -q 'selectable: True'; then
+        pass "CK int8 GEMM op registered, gated on, and selectable"
+    else
+        bad "CK int8 GEMM is NOT reachable -- serving will die at the first"
+        echo "        quantized linear, or silently run the Triton fallback at"
+        echo "        ~0.68x decode. Apply configs/enable_aiter_ck_gemm_gfx90a.py"
+        echo "        (after enable_vllm_aiter_gfx90a.py). Got:"
+        printf '%s\n' "${out}" | tail -6 | sed 's/^/          /'
+    fi
+else
+    bad "could not query the CK GEMM path:"; printf '%s\n' "${out}" | tail -8
+fi
+
+echo
 if [ "${fail}" -eq 0 ]; then
     echo "ALL CHECKS PASSED -- this image reaches AITER ASM on gfx90a."
 else
