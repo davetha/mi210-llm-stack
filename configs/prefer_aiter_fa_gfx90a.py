@@ -46,10 +46,13 @@ import sys
 SITE = "/opt/python/lib/python3.14/site-packages"
 ROCM_PY = f"{SITE}/vllm/platforms/rocm.py"
 
+# ANCHORED ON CODE ONLY, DELIBERATELY. An earlier version of this anchor
+# included the two comment lines above `if not use_kv_connector:`. vLLM
+# 0.26 rewrote that comment -- the code is byte-identical -- and the patch
+# failed with "expected 1, found 0" on a file it could have patched. A
+# comment is the most volatile text in a source file and the worst thing to
+# anchor on. The four lines below are unique in both 0.23.0 and 0.26.0.
 _ANCHOR = (
-    "    backends = []\n"
-    "    # ROCM_ATTN uses (2, num_blocks, ...) KV cache layout which is\n"
-    "    # incompatible with KV connectors that require blocks-first layout.\n"
     "    if not use_kv_connector:\n"
     "        backends.append(AttentionBackendEnum.ROCM_ATTN)\n"
     "    if rocm_aiter_ops.is_mha_enabled():\n"
@@ -57,10 +60,6 @@ _ANCHOR = (
 )
 
 _PATCHED = (
-    "    backends = []\n"
-    "    # ROCM_ATTN uses (2, num_blocks, ...) KV cache layout which is\n"
-    "    # incompatible with KV connectors that require blocks-first layout.\n"
-    "    #\n"
     "    # gfx90a: VLLM_PREFER_AITER_FA=1 puts ROCM_AITER_FA ahead of\n"
     "    # ROCM_ATTN. Upstream appends ROCM_ATTN first unconditionally and the\n"
     "    # first valid backend wins, so AITER flash attention is otherwise\n"
