@@ -1,0 +1,96 @@
+{
+  "label": "rd42-moe",
+  "tier": "35B",
+  "quant": "w8a8",
+  "engine": "vllm-aiter",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 27852,
+  "actual_prompt_tokens": 25751,
+  "ttft_s_median": 3.6723522139946,
+  "ttft_s_min": 3.6693340139463544,
+  "ttft_s_max": 3.674872159026563,
+  "implied_prefill_tps_median": 6996.877887170379,
+  "decode_tps_median": 80.99119517275646,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "kay, I'll keep it clean and exact. The user gets what they asked for: one word, no more, no less.\n</think>\n\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      57797656576,
+      57797656576
+    ],
+    "total_gb": 115.6
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      57797656576,
+      57797656576
+    ],
+    "total_gb": 115.6
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 3.6693340139463544,
+      "total_s": 6.8183933169348165,
+      "stream_tokens": 256,
+      "decode_tps": 80.97656947485018,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text provided before this instruction appears to be random words and phrases, but the instruction says to ignore it.\n\nI ...[snip]...  count from 1 to 60, one number per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n\nI'll make sure to output exactly 60 lines with the numbers 1 through 60, one per line",
+      "usage": {
+        "prompt_tokens": 25751,
+        "total_tokens": 26007,
+        "completion_tokens": 256
+      },
+      "rep": 0,
+      "marker": "c56b098edfbd4c90b256b5aba215fc31",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785613345.5996943,
+      "actual_prompt_tokens": 25751,
+      "implied_prefill_tps": 7017.894773854316
+    },
+    {
+      "ttft_s": 3.6723522139946,
+      "total_s": 6.820842087967321,
+      "stream_tokens": 256,
+      "decode_tps": 80.99119517275646,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text above is described as \"padding\" and I should ignore it.\n\nI'll simply output the numbers 1 through 60, one per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n1",
+      "usage": {
+        "prompt_tokens": 25695,
+        "total_tokens": 25951,
+        "completion_tokens": 256
+      },
+      "rep": 1,
+      "marker": "ed46bfb4749145c3b1b76b9ba4d913eb",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785613352.4214854,
+      "actual_prompt_tokens": 25695,
+      "implied_prefill_tps": 6996.877887170379
+    },
+    {
+      "ttft_s": 3.674872159026563,
+      "total_s": 6.820724944933318,
+      "stream_tokens": 256,
+      "decode_tps": 81.05884425706249,
+      "text": "<think>\nI need to count from 1 to 60, one number per line, and nothing else. The text above is described as \"padding\" that I should ignore.\n\nI'll simply output the numbers 1 through 60, one per line:\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n</think>\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13",
+      "usage": {
+        "prompt_tokens": 25653,
+        "total_tokens": 25909,
+        "completion_tokens": 256
+      },
+      "rep": 2,
+      "marker": "f160c7244ed348a38312390673654462",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785613359.245901,
+      "actual_prompt_tokens": 25653,
+      "implied_prefill_tps": 6980.650996794191
+    }
+  ],
+  "engine_footprint": {
+    "weights_gib": 14.66,
+    "load_seconds": 60.077616,
+    "kv_cache_gib": 36.45,
+    "kv_cache_tokens": 784208.0,
+    "graph_capture_gib": 5.51
+  }
+}
