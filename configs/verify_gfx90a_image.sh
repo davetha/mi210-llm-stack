@@ -172,6 +172,48 @@ else
 fi
 
 echo
+echo "=== 6. vLLM can inspect a model architecture ==="
+#
+# Added after round 36. Both source-built images passed every check above and
+# then failed EVERY arm with
+#
+#   Model architectures ['Qwen3MoeForCausalLM'] failed to be inspected
+#
+# The cause was a tensorizer downgrade breaking an import, but the point here is
+# the gap it exposed: everything above tests kernels and gates, and none of it
+# loads a model. vLLM inspects architectures in a subprocess and DISCARDS its
+# stderr, so the serve-time error names neither the package nor the real
+# exception. Running that subprocess directly is the cheapest way to find out --
+# it needs no weights and no GPU time.
+# Run the registry module exactly as vLLM does, and judge it on HOW it fails.
+#
+# An earlier version of this check called ModelRegistry.resolve_model_cls() with
+# one argument. That signature needs a model_config, so the check raised
+# TypeError and reported two perfectly good images as broken -- a false alarm is
+# as bad as a missed one here.
+#
+# This runs the real subprocess with no stdin. A healthy image gets all its
+# imports done and THEN dies on the empty pickle:
+#
+#   EOFError: Ran out of input          <- expected, means imports succeeded
+#
+# A broken optional dependency instead dies during import, which is what
+# tensorizer 2.10.1 did, and is what makes every serve fail with the unhelpful
+# "Model architectures [...] failed to be inspected".
+reg_out="$(python3 -m vllm.model_executor.models.registry </dev/null 2>&1)"
+if printf '%s' "${reg_out}" | grep -q "EOFError: Ran out of input"; then
+    pass "model registry subprocess imports cleanly (reached stdin read)"
+elif printf '%s' "${reg_out}" | grep -qE "ImportError|ModuleNotFoundError|KeyError|AttributeError"; then
+    bad "registry subprocess fails during IMPORT -- every serve will fail with"
+    echo "        \"Model architectures [...] failed to be inspected\", which names"
+    echo "        neither the package nor the error. The real cause:"
+    printf '%s\n' "${reg_out}" | grep -E "ImportError|ModuleNotFoundError|KeyError|AttributeError" | tail -3 | sed 's/^/          /'
+else
+    bad "registry subprocess failed in an unrecognised way:"
+    printf '%s\n' "${reg_out}" | tail -5 | sed 's/^/          /'
+fi
+
+echo
 if [ "${fail}" -eq 0 ]; then
     echo "ALL CHECKS PASSED -- this image reaches AITER ASM on gfx90a."
 else
