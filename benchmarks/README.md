@@ -14,6 +14,59 @@ For the full architecture constraints behind these numbers, see [`docs/01-gfx90a
 
 ---
 
+## The optimization stack — what each patch is worth
+
+The headline numbers, all measured on **Qwen3-30B-A3B W8A8, TP=2**, one
+variable per A/B, each with an assertion proving the code path actually ran.
+Rounds 31–42; full method in `docs/40`–`docs/45`.
+
+| Optimization | Metric | Gain | Round / doc |
+|---|---|---:|---|
+| **AITER CK int8 GEMM** (`VLLM_ROCM_USE_AITER_LINEAR=1`) | decode | **1.480×** (1.708× at TP=1) | 40 · `docs/43` |
+| **AITER ASM flash attention** (`VLLM_PREFER_AITER_FA=1`) | prefill | **1.190×** @16k, **1.332×** @25k | 37 · `docs/28` |
+| | TTFT | 0.850× / 0.752× | |
+| **PCIe P2P** (`NCCL_P2P_DISABLE=0`) | prefill | **1.112×** | 31 · `docs/40` |
+| **Async scheduling** (default-on in ≥0.26) | decode | **1.110×** | 38b · `docs/42` |
+| **256k paged attention** (patched gfx9 gate) | decode @205k | **13.08×** | — · `docs/36` |
+| vLLM 0.23.1 → 0.26.1rc0 | decode | 1.035× | 36 · `docs/42` |
+
+**Read the gains as independent, not cumulative.** Each row is a single-variable
+A/B against a baseline that already had the *other* optimizations on. The
+reference arm moved **55.7 → 82.9 tok/s decode**, and that is the CK GEMM row
+alone — its 55.7 baseline already included AITER FA, P2P and async scheduling.
+Reproduced on two independently built images (82.48 and 82.92). Nobody has
+measured a stock-everything-off arm against the full stack, so no total-stack
+multiplier is claimed here.
+
+### Measured and rejected
+
+Recorded because a negative result costs the same GPU time as a positive one,
+and re-testing these is pure waste.
+
+| Tried | Result |
+|---|---|
+| GPU clock pinning (1700 MHz) | 0.968× — DPM was never throttling decode |
+| CUDA-graph capture geometry (131k vs 32k) | 0.986× — no self-inflicted config tax |
+| PCIe ACS redirect removal | null, all arms within 0.4% |
+| Tuned fused-MoE config (partial) | **0.786×** — nearest-M match with no fallback |
+| AITER fused MoE (`_MOE=1`) | 0.977× — runs (`module_moe_asm` loads), just slower |
+| AITER rope / unified-attn / custom-AR / triton-GEMM | cannot engage; four distinct reasons, `docs/45` |
+| `enforce_eager` | **3.5× slower**, 82% of decode in gaps between kernels |
+
+### Where the remaining time goes
+
+Decode-window kernel profile at **99.9% GPU-busy** (rocprofv3, round 41) — so
+the residual is *in-kernel*, not launch overhead:
+
+| kernel | % of decode |
+|---|---:|
+| MoE cluster (`fused_moe` + `topkGating` + `moe_sum_vec`) | **32%** |
+| `paged_attention_ll4mi` | 13.1% |
+| `wvSplitK` | 8.5% |
+| `dynamic_scaled_int8_quant` | 6.2% |
+
+---
+
 ## Standardized 13K-Token Prefill Benchmarks
 
 Cross-engine cold/hot prefill comparison with a deterministic ~13K token prompt.
@@ -184,6 +237,17 @@ Three independent blockers — KTransformers cannot serve any model on this hard
 ---
 
 ## Related docs
+
+**The optimization rounds** (the table at the top of this file):
+
+- [`docs/43-ck-int8-gemm-gfx90a.md`](../docs/43-ck-int8-gemm-gfx90a.md) — the CK int8 GEMM, **1.48× decode**, the three gates that hid it, and the tuner that deadlocks
+- [`docs/45-aiter-fast-path-survey.md`](../docs/45-aiter-fast-path-survey.md) — all 17 AITER gates surveyed; one runs and loses, four cannot engage
+- [`docs/42-decode-gap-probes.md`](../docs/42-decode-gap-probes.md) — clocks, capture geometry and launch overhead ruled out; the ~3× gap is **in-kernel** at 99.9% coverage
+- [`docs/40-the-three-collective-gates.md`](../docs/40-the-three-collective-gates.md) — PCIe P2P works: 26.98 GB/s peer vs 14.16 staged
+- [`docs/36-depth-curves-and-256k-validation.md`](../docs/36-depth-curves-and-256k-validation.md) — the 256k paged-attention result
+- [`benchmarks/matrix/REPRODUCE.md`](./matrix/REPRODUCE.md) — exact images, flags and patch order to reproduce any of it
+
+**Background:**
 
 - [`docs/06-vllm-poc-results.md`](../docs/06-vllm-poc-results.md) — vLLM single-GPU + multi-GPU POC detail
 - [`docs/07-ktransformers-poc-results.md`](../docs/07-ktransformers-poc-results.md) — KTransformers POC detail
