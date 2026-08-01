@@ -308,3 +308,80 @@ exist for a bf16 model on this card at all — an independent confirmation of th
 **Verdict: no unexploited ASM opportunity remains.** The largest unlisted
 family is inference-irrelevant, the only structurally live new path is blocked
 by head_dim and by a concurrency heuristic, and the rejection logic is correct.
+
+---
+
+## Round 46: the master gate works, and the allreduce lead closes three gates deep
+
+`round46_allreduce_fusion.sh`, TP=2, control (`aiterops`) vs `mastergate` with
+`--compilation-config '{"pass_config":{"fuse_allreduce_rms":true}}'`.
+
+| workload | metric | control | AR-fused | factor | bar |
+|---|---|---:|---:|---:|---:|
+| longctx | decode | 82.56 | 83.19 | 1.008× | 1.036× |
+| longctx | prefill | 6968.98 | 6987.25 | 1.003× | 1.005× |
+| cold16k | prefill | 8555.47 | 8567.64 | 1.001× | 1.002× |
+| cold16k | ttft | 1.78 | 1.77 | 0.998× | 1.007× |
+
+**Every metric is inside the round-45 noise floor.** And the control's 82.56
+decode lands on round 45's five-run mean of 82.66 — a sixth independent launch
+falling inside the interval, which validates that measurement too.
+
+### The good news: no regression
+
+Both arms show **4 ASM code objects** and **CK GEMM present**. The stated risk —
+that carving out `is_enabled()` would disturb the working flash-attention path
+through its two consumers in `rocm_aiter_fa.py` — **did not materialise**. Those
+two call sites are `fused_rope_kvcache_supported()` and
+`fused_qk_norm_rope_kvcache_supported()`, capability *advertisements* for
+fusions whose own `pass_config` flags default off, not the ASM dispatch. The
+1.19–1.33× prefill and 1.48× decode wins are untouched.
+
+### The gate works — and the fusion still refuses
+
+The carve-out did exactly what it was supposed to. From the fused arm's log:
+
+```
+Enabled custom fusions: norm_quant, allreduce_rms, mla_dual_rms_norm
+```
+
+Those passes are now added where previously `pass_manager.py` skipped them
+entirely. Then:
+
+```
+AITER allreduce fusions are disabled because AITER Custom All Reduce is not
+enabled. Set VLLM_ROCM_USE_AITER_CUSTOM_AR=1
+AllReduce fusion pass is disabled.
+```
+
+So this arm is **under-configured, not a disproof** — predicted before the run
+from `config/vllm.py:1924`, which sizes the fusion via
+`is_custom_all_reduce_enabled()`.
+
+### Why it is not worth chasing further
+
+Setting that flag is not sufficient, and two independent facts close the lead:
+
+1. **Custom all-reduce is MI300-only at the platform layer.**
+   `platforms/rocm.py:900`: `use_custom_allreduce()` returns
+   `any(gfx in _GCN_ARCH for gfx in ["gfx94", "gfx95"])` — gfx90a excluded by
+   design — which force-sets `disable_custom_all_reduce = True`
+   (`config/parallel.py:1017`). Reaching the fusion needs a **third** carve-out,
+   into collective code, where a defect produces wrong reductions rather than a
+   slow kernel. That is a different risk class from every gate opened so far.
+2. **The ASM objects are shape-specialised and do not match this model.** The
+   ported files are `allreduce_rmsnorm_**N8192**.co`,
+   `allreduce_rmsnorm_qnt_N8192.co`, `allreduce_layernorm_N8192.co`. This
+   model's hidden size is **2048**. Even with all three gates open, the N8192
+   kernels have no shape to match here.
+
+Point 2 stands regardless of point 1, so the lead closes on shape grounds
+alone. `docs/37`'s original dismissal reached the right answer via the wrong
+argument ("no XGMI", refuted by round 31); the correct reasons are
+MI300-gating in the platform layer and N8192 specialisation.
+
+**What survives:** `configs/enable_aiter_master_gate_gfx90a.py` is validated as
+safe — it enables three fusion passes with no regression to either existing
+win — and is available if a future model or fusion needs it. It is **not**
+wired into `Dockerfile.vllm-mi210`, because on this model it changes nothing
+measurable.
