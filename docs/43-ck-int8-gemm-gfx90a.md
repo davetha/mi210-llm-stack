@@ -175,14 +175,88 @@ than a crash.
 - **`docs/42`'s scoreboard**: the in-kernel lead is no longer just a direction.
   44% of decode kernel time was Triton leaving the card idle, and reclaiming it
   is worth 1.48× at TP=2 / 1.71× at TP=1.
-- **Still open, and now more attractive**: `a8w8_tuned_gemm.csv` has no gfx90a
-  rows, so all of the above is CK's *default* instance selection. AITER ships
-  `gemm_a8w8_tune.py`. Round 34's lesson (a partial tuned config was 0.79×)
-  says tuning must cover the served shapes or be left alone — but a full tune
-  is the obvious next lever.
+- **Tuning: ATTEMPTED, and it deadlocks. Do not repeat it as written.** See §6.
 - **`fused_moe_kernel`** is now the largest decode kernel by a wide margin. It
   is the next target, via the same question this round asked: is vLLM running a
   generic fallback where an AITER kernel exists?
+
+## 6. Tuning the CK GEMM: attempted, deadlocked, and why
+
+Everything above is CK's **default (untuned) instance selection**.
+`aiter/configs/a8w8_tuned_gemm.csv` holds 553 gfx950 rows + 26 gfx942 rows and
+**zero for gfx90a**, and every call logs `not found tuned config ... will use
+default config!`. So a tune looked like free upside. It is not free, and the
+attempt failed.
+
+### First, the good news: a PARTIAL tune is safe here
+
+Round 34 measured a partial tuned MoE config at **0.79× prefill** and this
+project generalised that into "partial configs are harmful." **That
+generalisation does not hold for a8w8**, and the difference is worth stating
+precisely because it inverts the earlier lesson:
+
+| | `fused_moe` (round 34) | `gemm_a8w8` (here) |
+|---|---|---|
+| lookup | `min(configs.keys(), key=lambda x: abs(x - M))` | exact dict key |
+| key | M only | `(gfx, cu_num, padded_M, N, K, q_dtype_w)` |
+| miss behaviour | **nearest entry, no fallback** | returns `None` → default |
+
+Two consequences. A shape with no tuned row falls back to the default kernel
+*per shape* (`gemm_op_a8w8.py`, the `if config is None:` branch), so partial
+coverage cannot poison untuned shapes. And because `gfx` is **in the key**, the
+579 gfx942/gfx950 rows already in that file can never be mis-applied to CDNA2 —
+which is also why they are invisible rather than harmful today.
+
+So a tune covering only the shapes actually served would be legitimate. The
+blocker is getting one.
+
+### The failure: `--tune` builds FP8 instances, on a card with no FP8 ALU
+
+Run over 24 served shapes (qkv and o_proj at both TP=1 and TP=2 widths,
+M=1..32), the tuner ran **40 minutes and produced nothing**. Diagnosis at the
+point it was killed:
+
+- main process in **`futex_do_wait`**, blocked on
+  `aiter/jit/build/lock_module_gemm_a8w8_tune`;
+- **no** clang and **no** ninja process alive; both GPUs at **0%**;
+- 167 objects built, no `.so` ever linked;
+- `.ninja_log` last entries:
+  `a8w8_rowwise_..._abF8_dF32_eB16` — **FP8 instances** — with
+  end-minus-start times of ~1.5×10⁶ ms, i.e. **~25 minutes per object**.
+
+The cause is a codegen path difference, not an AITER bug, and `docs/20` had
+already mapped the structure: `kernels_list` drives instance generation **only
+under `--tune`**, which builds the separate `module_gemm_a8w8_tune`, while the
+normal build goes through `get_tune_dict()` → `default_kernels_dict` (9
+entries). What `docs/20` did not know is what that costs on this card.
+
+The normal path honours this project's FP8 exclusion — `gen_instances.py` sets
+`_NO_FP8 = get_gfx() == "gfx90a"` and emits the `AITER_A8W8_NO_FP8` guard,
+which is why the 9 default instances build in minutes. `--tune` passes the
+**full** `kernels_list`, FP8 included, so the tuner spends its life compiling
+enormous CK templates for a datatype gfx90a cannot execute, then deadlocks.
+
+*Version drift worth noting:* `docs/20` records `kernels_list` at **72
+entries**; measured here on the current image it is **86**. The list has grown
+between AITER versions, so treat any absolute count in either document as
+version-specific rather than assuming one is wrong.
+
+**The setup error was mine**: the FP8 exclusion was assumed to apply
+everywhere rather than checked against the branch actually taken — the same
+shape of mistake as assuming a partial config was harmless.
+
+### If anyone retries
+
+Filter FP8 entries out of `kernels_list` before the tune codegen runs, mirroring
+the `_NO_FP8` guard that already exists on the other path. That should cut the
+build dramatically, since FP8 instances dominate the compile time and are dead
+weight here regardless.
+
+**But weigh it first.** The untuned default already beats Triton by 5.87× per
+call, so the remaining headroom is the gap between a good CK instance and the
+best one — likely single-digit percent. `fused_moe_kernel`, now the largest
+decode kernel at 1947 ms, has never been examined at all. Expected value
+strongly favours the MoE question over squeezing this GEMM further.
 
 [ROCm/aiter#1415]: https://github.com/ROCm/aiter/issues/1415
 [#1552]: https://github.com/ROCm/aiter/issues/1552
