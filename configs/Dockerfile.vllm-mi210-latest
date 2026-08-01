@@ -1,0 +1,211 @@
+# vLLM built from source on gfx90a, so the version is a build argument.
+#
+#   docker build -f configs/Dockerfile.vllm-mi210-latest \
+#     --build-arg VLLM_REF=v0.26.0 --build-arg AITER_TAG=v0.1.19 \
+#     -t vllm-mi210:v0.26.0 .
+#
+# Dockerfile.vllm-mi210 is the SUPPORTED build: it takes AMD's prebuilt vLLM and
+# patches it. This one replaces vLLM with a source build, which is how you get
+# ahead of AMD's release cadence, and is correspondingly less safe. Keep both.
+#
+# ---------------------------------------------------------------------------
+# WHAT "LATEST" CAN AND CANNOT MEAN HERE
+#
+# The ceiling is torch, not vLLM, and not effort. As of 2026-08-01:
+#
+#   PyTorch stable, rocm7.0        torch 2.10.0
+#   PyTorch nightly, rocm7.0       torch 2.11.0
+#   AMD rocm/vllm image            torch 2.11.0+rocm7.14.0   <- what we build on
+#   vLLM upstream main requires    torch 2.13.0
+#
+# There is no torch 2.13 for ROCm from anyone. AMD is not behind here -- their
+# image is the most current ROCm+torch combination that exists, and vLLM's main
+# branch targets a torch ROCm has not shipped. So `main` is out of reach until
+# that changes, and no amount of build engineering closes it.
+#
+# What IS reachable: every tagged vLLM RELEASE through v0.26.0 still pins
+# torch==2.11.0. That is three minor versions ahead of the 0.23.0 in AMD's
+# image, available today, on the torch we already have. VLLM_REF below is
+# therefore a real knob and not a wish.
+#
+# Check before bumping past a release:
+#   git show <tag>:requirements/cuda.txt | grep '^torch=='
+# If it says anything other than 2.11.0, stop -- the build will not work, and
+# the failure will be a confusing C++ error rather than a version complaint.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS COSTS
+#
+# * A full vLLM compile, not just the _rocm_C extension the supported build
+#   rebuilds. Expect tens of minutes even with ccache warm.
+# * Patch drift. enable_vllm_aiter_gfx90a.py and extend_rocm_pa_256k_gfx9.py
+#   assert on exact source text and WILL fail on a version they were not
+#   derived against. That is the intended behaviour -- a silent miss here means
+#   an image that serves correctly and slowly, which this project has published
+#   bad numbers from twice. Re-derive; do not force.
+# * enable_int8_moe_rocm.py is DELIBERATELY ABSENT. AMD fixed that gate
+#   upstream in 1053e248f0 (PR #46765, 2026-07-27) with a broader condition
+#   than ours, so from v0.26.0 it is redundant and would fail its own match
+#   assertion. Verified below instead of applied.
+# * Nothing here is benchmarked. Every number in docs/28 and docs/37 was
+#   measured on 0.23; treat this image as unmeasured until a baseline sweep
+#   says otherwise.
+
+ARG BASE=rocm/vllm:rocm7.14.0_cdna_ubuntu24.04_py3.14_pytorch_2.11.0_vllm_0.23.0
+FROM ${BASE}
+
+ARG VLLM_REF=v0.26.0
+ARG AITER_TAG=v0.1.19
+ARG BUILD_JOBS=20
+
+ENV GPU_ARCHS=gfx90a \
+    PYTORCH_ROCM_ARCH=gfx90a \
+    VLLM_TARGET_DEVICE=rocm \
+    SITE=/opt/python/lib/python3.14/site-packages
+
+COPY configs/repatch_gfx942_to_gfx90a.py \
+     configs/enable_gfx90a_asm_paths.py \
+     configs/enable_vllm_aiter_gfx90a.py \
+     configs/extend_rocm_pa_256k_gfx9.py \
+     configs/enable_sharded_state_tp_check.py \
+     configs/prefer_aiter_fa_gfx90a.py \
+     configs/enable_int8_moe_rocm.py \
+     /opt/mi210/
+
+# --- 1. refuse to build against a torch this vLLM does not target -----------
+#
+# Checked first because it is the cheapest possible failure. Getting this wrong
+# produces a C++ error deep in a 40-minute compile that says nothing about
+# versions.
+RUN set -eux; \
+    git clone --depth 1 --branch "${VLLM_REF}" https://github.com/vllm-project/vllm.git /src/vllm; \
+    want="$(grep -oE '^torch==[0-9.]+' /src/vllm/requirements/cuda.txt | head -1 | cut -d= -f3)"; \
+    have="$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')"; \
+    echo "vLLM ${VLLM_REF} wants torch ${want}; image has ${have}"; \
+    [ "${want}" = "${have}" ] || { \
+      echo "FATAL: torch mismatch. ${VLLM_REF} targets ${want}, this image has ${have}." >&2; \
+      echo "       No torch ${want} exists for ROCm unless AMD has shipped one." >&2; \
+      exit 1; }
+
+# --- 2. AITER from source ---------------------------------------------------
+RUN --mount=type=cache,target=/ccache,sharing=locked \
+    set -eux; \
+    export CCACHE_DIR=/ccache CCACHE_MAXSIZE=100G CCACHE_DEPEND=1; \
+    git clone --recursive --depth 1 --branch "${AITER_TAG}" \
+        https://github.com/ROCm/aiter.git /src/aiter; \
+    cd /src/aiter; \
+    python3 -m pip uninstall -y amd-aiter aiter 2>/dev/null || true; \
+    python3 -m pip install --no-build-isolation .; \
+    python3 -m pip install --quiet 'triton==3.7.1'; \
+    python3 -c 'import triton; assert triton.__version__ == "3.7.1", triton.__version__'
+
+# --- 3. gfx942 ASM -> gfx90a ------------------------------------------------
+RUN set -eux; \
+    HSA="$(ls -d ${SITE}/aiter_meta/hsa 2>/dev/null || ls -d ${SITE}/aiter/hsa)"; \
+    python3 /opt/mi210/repatch_gfx942_to_gfx90a.py "${HSA}/gfx942" /tmp/gfx90a; \
+    rm -rf "${HSA}/gfx90a"; cp -r /tmp/gfx90a "${HSA}/gfx90a"; \
+    n="$(find "${HSA}/gfx90a" -name '*.co' | wc -l)"; \
+    echo "installed ${n} gfx90a code objects"; \
+    [ "${n}" -ge 200 ] || { echo "FATAL: only ${n} code objects" >&2; exit 1; }
+
+RUN python3 /opt/mi210/enable_gfx90a_asm_paths.py
+
+# --- 4. replace vLLM with the source build ----------------------------------
+#
+# The 256k paged-attention patch edits csrc/rocm/attention.cu, so it must be
+# applied to the SOURCE before compiling -- unlike the supported build, which
+# patches and then rebuilds only _rocm_C.
+RUN --mount=type=cache,target=/ccache,sharing=locked \
+    set -eux; \
+    export CCACHE_DIR=/ccache CCACHE_MAXSIZE=100G CCACHE_DEPEND=1 MAX_JOBS="${BUILD_JOBS}"; \
+    cd /src/vllm; \
+    python3 /opt/mi210/extend_rocm_pa_256k_gfx9.py --vllm-src /src/vllm \
+        --site-packages "${SITE}/vllm"; \
+    python3 -m pip uninstall -y vllm; \
+    python3 -m pip install --no-build-isolation -v . 2>&1 | tail -30; \
+    python3 -c 'import vllm; print("built vllm", vllm.__version__)'
+
+# --- 5. re-apply the Python-side patches to the NEW install -----------------
+#
+# Step 4 replaced site-packages/vllm wholesale, so anything patched before it
+# is gone. These run after, deliberately.
+#
+# The 256k patch has TWO halves and they live in different places: the
+# reduction switch in csrc/rocm/attention.cu, which step 4 patched before
+# compiling, and the gfx9 gate in platforms/rocm.py, which is pure Python and
+# was overwritten by the pip install. An earlier revision of this step only
+# ran --check here, which faithfully reported
+#
+#   PATCHED  /src/vllm/csrc/rocm/attention.cu
+#   stock    .../site-packages/vllm/platforms/rocm.py
+#
+# and carried on, because --check reports state rather than enforcing it. That
+# would have produced an image with the extended kernel compiled in and the
+# gate still refusing to call it above 128k -- the exact silent-slowness this
+# repo keeps having to catch. Applied for real; attention.cu reports "already
+# patched" and is left alone.
+#
+# INT8 MoE, at the end of this step: apply ours ONLY if upstream has not already
+# fixed it. AMD widened that gate themselves in 1053e248f0 (PR #46765) on
+# 2026-07-27 -- ONE DAY AFTER v0.26.0 was tagged, so that release still needs
+# our patch and later ones will not. Deciding by version is how an earlier
+# revision of this file got it wrong: it read the fix on main and assumed the
+# 0.26 release carried it. Test the tree, not the tag.
+#
+# These comments sit ABOVE the RUN deliberately. The `# text` backtick idiom
+# used in serve_vllm_aiter.sh works in ARGUMENT positions; as a standalone
+# statement in a ;-separated sequence the shell executes the empty substitution
+# and the step dies with exit 127, which is how the previous attempt failed. A
+# plain Dockerfile comment cannot go inside a line-continued RUN either, since
+# continuations are joined before the shell sees them and a `#` would swallow
+# the rest of the command.
+RUN set -eux; \
+    python3 /opt/mi210/extend_rocm_pa_256k_gfx9.py --vllm-src /src/vllm \
+        --site-packages "${SITE}/vllm"; \
+    python3 /opt/mi210/enable_vllm_aiter_gfx90a.py; \
+    python3 /opt/mi210/prefer_aiter_fa_gfx90a.py; \
+    python3 /opt/mi210/enable_sharded_state_tp_check.py; \
+    TM="${SITE}/vllm/model_executor/layers/fused_moe/experts/triton_moe.py"; \
+    if grep -q 'is_rocm()' "${TM}"; then \
+        echo "int8 MoE: fixed upstream in this vLLM, skipping our patch"; \
+    else \
+        echo "int8 MoE: upstream fix absent, applying enable_int8_moe_rocm.py"; \
+        python3 /opt/mi210/enable_int8_moe_rocm.py; \
+        grep -q '_rocm_int8' "${TM}" \
+          || { echo 'FATAL: int8 MoE gate not widened' >&2; exit 1; }; \
+    fi
+
+# --- 6. verify, and confirm the int8 MoE gate is fixed upstream -------------
+RUN set -eux; \
+    python3 /opt/mi210/enable_vllm_aiter_gfx90a.py --check; \
+    python3 /opt/mi210/enable_gfx90a_asm_paths.py --assert-patched; \
+    python3 /opt/mi210/enable_sharded_state_tp_check.py --assert-patched; \
+    python3 - <<'PY'
+import pathlib, sys
+site = pathlib.Path("/opt/python/lib/python3.14/site-packages")
+bad = []
+if "_prefer_aiter_fa" not in (site / "vllm/platforms/rocm.py").read_text():
+    bad.append("rocm.py: AITER FA admitted but never selectable")
+if "PATCHED (mi210-llm-stack)" not in (site / "vllm/platforms/rocm.py").read_text():
+    bad.append("rocm.py: 256k gate not applied")
+# INT8 MoE must be reachable, by EITHER route: upstream's own fix
+# (1053e248f0, `or current_platform.is_rocm()`) or ours (`_rocm_int8`).
+# Accepting only one of them is what failed the v0.26.0 build, since that
+# release was tagged one day before AMD landed theirs.
+tm = (site / "vllm/model_executor/layers/fused_moe/experts/triton_moe.py").read_text()
+if "is_rocm()" not in tm and "_rocm_int8" not in tm:
+    bad.append("triton_moe.py: INT8 MoE still CUDA-gated by both routes -- "
+               "W8A8 will not load")
+if bad:
+    print("FATAL:", *bad, sep="\n  ", file=sys.stderr); sys.exit(1)
+print("build-time verification passed (file level; run verify-gfx90a on a card)")
+PY
+
+COPY configs/verify_gfx90a_image.sh /usr/local/bin/verify-gfx90a
+RUN chmod +x /usr/local/bin/verify-gfx90a
+
+WORKDIR /app
+CMD ["/bin/bash"]
+LABEL org.opencontainers.image.title="vllm-mi210-latest" \
+      org.opencontainers.image.description="vLLM built from source for gfx90a (MI210/CDNA2), version selectable via VLLM_REF" \
+      org.opencontainers.image.source="https://github.com/davetha/mi210-llm-stack"
