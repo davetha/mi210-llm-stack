@@ -229,14 +229,46 @@ Qwen3-30B-A3B, output tokens/s:
 At concurrency 32 that is also **1.25× better TPOT** (394 → 315 ms) and **14%
 lower TTFT** (12.5 → 10.7 s).
 
-**Be honest about the shape of this win.** It is 1.23× on long prompts under
-concurrency and *nothing at all* otherwise — a 128-token prefill is too small to
-occupy an MI210, and single-stream decode is bound by streaming 28 GB of weights,
-not by the attention kernel. Essentially all of the gain is prefill: the ASM
-*decode* kernel, measured at 1.72× in isolation, is worth about 1% end-to-end,
-which is inside this harness's noise. In isolation the kernel is genuinely fast —
-1.13–1.86× vs PyTorch SDPA, **89.9 TFLOP/s, 50% of the card's bf16 peak** — but
-serving is not a microbenchmark.
+> ### The "nothing at concurrency 1" reading was wrong — it is a PROMPT SIZE effect
+>
+> This section previously concluded the win is *"1.23× on long prompts under
+> concurrency and nothing at all otherwise"*, on the strength of the
+> 1.01–1.02× concurrency-1 column above. **Round 37 measures 1.19–1.33× at
+> concurrency 1.** The discriminator is prompt size, not concurrency.
+>
+> One image, one session, `VLLM_PREFER_AITER_FA` 1 vs 0 — the only variable
+> that moves `ROCM_AITER_FA` ahead of `ROCM_ATTN`. Control proven distinct:
+> 4 ASM code objects loaded versus **0**.
+>
+> | workload | metric | `ROCM_ATTN` | AITER FA | factor |
+> |---|---|---:|---:|---:|
+> | cold 16k | prefill | 6,106.26 | **7,263.44** | **1.190×** |
+> | cold 16k | TTFT | 2.46 s | **2.09 s** | **0.850×** |
+> | longctx ~25k | prefill | 4,661.99 | **6,210.93** | **1.332×** |
+> | longctx ~25k | decode | 50.46 | **54.31** | **1.076×** |
+> | longctx ~25k | TTFT | 5.52 s | **4.15 s** | **0.752×** |
+>
+> The table above is at **4,096-token** prompts; these are **16k and 25k**. A
+> 4k prefill does not occupy an MI210 at batch 1, so there is nothing for a
+> faster attention kernel to win back. At 16k it does, and the ASM kernel
+> collects it. Both readings are correct about their own workload; the error
+> was generalising the small-prompt null to "otherwise".
+>
+> **This is the largest single win in the stack** — larger than three minor
+> versions of upstream vLLM, which round 36 measured at 1.017–1.029×.
+>
+> Decode moves too (+7.6%), which the 4k table also shows as ~1%. Same cause:
+> at 25k there is enough attention work per token for the kernel to matter.
+
+**The isolated-kernel figures still stand**: 1.13–1.86× vs PyTorch SDPA,
+**89.9 TFLOP/s, 50% of the card's bf16 peak**. Serving is not a microbenchmark —
+but at realistic prompt lengths it now recovers most of that.
+
+> **Selection is not admission.** None of this happens without
+> `configs/prefer_aiter_fa_gfx90a.py` **and** `VLLM_PREFER_AITER_FA=1`.
+> `_get_backend_priorities()` appends `ROCM_ATTN` unconditionally first, so an
+> image that merely *admits* AITER to the candidate list runs `ROCM_ATTN`
+> forever and loads zero ASM. Check the `LoadKernel` line, not the flag.
 
 ### 3.3 The repatcher
 

@@ -93,7 +93,18 @@ case "$ENGINE" in
     # vllm-aiter is the DEFAULT for vLLM arms now: AITER ASM attention measured
     # 12.8% faster prefill than stock ROCM_ATTN on gfx90a, proven by the .co
     # loads rather than inferred. "vllm" remains available for A/B against it.
-    vllm-aiter) VLLM_PREFER_AITER_FA=1 "$BIN/serve_vllm_aiter.sh" "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
+    # Defaults to 1 -- an aiter arm that does not prefer AITER FA is almost
+    # never what the caller meant, since ROCM_ATTN is appended first
+    # unconditionally and would win. But it is OVERRIDABLE, because hardcoding
+    # it makes the one A/B that matters impossible: round 37 exported
+    # VLLM_PREFER_AITER_FA=0 for its control arm, this line forced it back to 1,
+    # and both arms loaded 4 ASM objects. The round's own guard caught that the
+    # arms were not distinct and refused to report numbers.
+    #
+    # Third instance of this defect class here, after serve_vllm_aiter.sh's
+    # IMAGE and NCCL_P2P_DISABLE in both serve scripts. A hardcoded value in the
+    # arm-launch path is not a default, it is a silent override of the caller.
+    vllm-aiter) VLLM_PREFER_AITER_FA="${VLLM_PREFER_AITER_FA:-1}" "$BIN/serve_vllm_aiter.sh" "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     vllm)     "$BIN/serve_vllm.sh"     "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     llamacpp) "$BIN/serve_llamacpp.sh" "$MODEL_DIR" "$NAME" "$PORT" "$@" || { fail "server would not start"; exit 1; } ;;
     *) echo "unknown engine $ENGINE"; exit 2 ;;
