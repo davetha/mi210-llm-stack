@@ -501,7 +501,7 @@ them cost real time to establish.
 | `pa` | 8 | **No call site.** `pa_fwd_asm` appears 6× in vLLM 0.23.1, none of them a call. The kernels are fine: 48/48 configs numerically exact, 0 failures on re-run. |
 | `mla` | 11 | **Flag inert.** `VLLM_ROCM_USE_AITER_MLA` 1 vs 0 → 8,630.8/93.34 vs 8,660.9/93.56. vLLM logs `Using FLASH_ATTN MLA` either way. |
 | `fmoe` | 8 | **PARTLY SUPERSEDED (round 42, `docs/45`).** With the gates carved out, `VLLM_ROCM_USE_AITER_MOE=1` *does* run — the server loads `module_moe_asm` and serves correctly — so "the kernel declines the device" is wrong as stated. It is simply not faster here: **0.977× decode**. The second clause still stands and is the likely reason: the 8 gfx90a objects are `noquant{Fp16,Bf16}` and cannot consume quantized weights. |
-| `topksoftmax` | 22 | Untested, and not worth testing: MoE routing is <1% of MoE work. |
+| `topksoftmax` | 22 | **TESTED (round 43, `docs/45`). Right conclusion, wrong reason.** The "<1%" estimate is wrong — `topkGating` is **4.9% of decode** — and 22/22 objects port. But the dispatch rides on `is_fused_moe_enabled()`, and enabling it swaps one `vllm::moe::` topk kernel for another at the same price (388.5 → 386.8 ms). These ASM objects are never reached through vLLM's path. |
 | `allreduce_*` | 4 | Blocked by the upstream `NameError` (§1), and there is no XGMI for it to accelerate anyway. |
 
 All of them share one upstream root cause — `is_aiter_found_and_supported()` →
