@@ -130,6 +130,16 @@ it is three things, not one.
 
 ## 6. The finding that matters most for performance
 
+> **CORRECTED 2026-08-02 — see `docs/50` §1b.** The call is there; the kernels
+> are not. Running the CK 2-stage tuner on gfx90a returns `us1 = us2 = us = -1`
+> for all 20 shapes with *"stage1 and stage2 should be valid together"* — **zero
+> valid CK 2-stage kernel pairs exist for int8 MoE on this card.** Round 55
+> independently shows Triton `fused_moe_kernel_gptq_awq` doing the work. So the
+> MoE path here is **Triton**: the ASM tree (this document) and the CK 2-stage
+> path are both unavailable to it. The paragraph below infers the backend from a
+> call site rather than from what actually executes — the same mistake this
+> document criticises elsewhere.
+
 vLLM's AITER MoE path goes through `aiter.fused_moe`, which calls
 **`ck_moe_stage1` / `ck_moe_stage2_fwd`** — Composable Kernel, compiled from
 source. **Not the ASM tree at all.**
