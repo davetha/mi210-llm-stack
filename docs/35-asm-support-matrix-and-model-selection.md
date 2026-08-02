@@ -49,6 +49,15 @@ All `noquant{Fp16,Bf16}`, all `g1u0`, all `32x512` (`docs/33`). So: **unquantize
 bf16/fp16 experts only**, plus `VLLM_ROCM_USE_AITER_MOE=1`, which this stack had
 been setting to `0` by hand.
 
+> **CORRECTED 2026-08-01 — see `docs/48`.** "unquantized bf16/fp16 experts" is
+> wrong. All 8 objects belong to the **fp16 family** (`fmoe_fp16_*`); gfx90a has
+> **zero** `fmoe_bf16_*` objects, against 202 on gfx942 and 224 on gfx950. Of
+> the 23 gfx90a `fmoe` config tables, only two have any rows —
+> `fmoe_fp16_noquant_g1u0_{silu,gelu}.csv`. Every bf16 table, every int8 table
+> and every fp8 table is header-only. The two `fp16_noquantBf16` objects are
+> reachable **only through the fp16-family table**, so they do not make a bf16
+> checkpoint eligible.
+
 ### ROOT CAUSE, 2026-07-30 — one upstream predicate explains all of it
 
 Everything below was diagnosed family by family before the common cause turned
@@ -159,17 +168,22 @@ To reach every ASM path a model must satisfy **all** of:
 | `head_dim` | **128 or 192** | `fmha_v3_fwd` coverage |
 | GQA ratio (`heads / kv_heads`) | **exactly 8 or 16** | `pa` coverage |
 | attention dtype | **bf16** | no fp16 `fmha_v3_fwd` objects |
-| MoE expert weights | **unquantized bf16/fp16** | `fmoe` is `noquant` only |
+| MoE expert weights | ~~**unquantized bf16/fp16**~~ **unquantized fp16-family only** | of 23 gfx90a `fmoe` tables only the two `fp16_noquant` ones have rows; the whole `fmoe_bf16_*` family is absent from the port (`docs/48`) |
 | env | `VLLM_ROCM_USE_AITER_MOE=1` | otherwise the backend is removed |
 
-**You already own a model that satisfies all five**: Qwen3-30B-A3B is
-`head_dim=128`, 32/4 = **ratio 8**, MoE, and `t35-bf16` is on disk. Round 19's
-bf16 arms are the first configuration that can exercise fmha + pa + fmoe ASM
-simultaneously.
+~~**You already own a model that satisfies all five**~~ — **no, and round 51
+proved it.** Qwen3-30B-A3B is `head_dim=128`, 32/4 = **ratio 8**, MoE, and
+`t35-bf16` is on disk, so it clears rows 1–3 and 5. It fails **row 4**:
+`t35-bf16` is `bfloat16` throughout, and there is no bf16 `fmoe` kernel on this
+card. **No model on this hardware clears all five**, so no configuration can
+exercise fmha + pa + fmoe ASM simultaneously. See `docs/48`.
 
 Note the tension between rows 3–4 and `docs/28`: unquantized bf16 is exactly what
 that doc discourages because of the 12,366 s load. `docs/34`'s
-`--load-format sharded_state` removes that objection.
+`--load-format sharded_state` removes that objection — though round 51 found a
+second obstacle there too: a `sharded_state` snapshot is
+**backend-configuration-specific**, not merely engine-version-specific, because
+the `experts.runner` submodule's presence depends on `runner_cls`.
 
 ---
 
