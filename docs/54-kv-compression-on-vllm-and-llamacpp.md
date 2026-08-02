@@ -126,34 +126,47 @@ Rounds 66/67 established that KV-quant cost is strongly context-dependent — tu
 
 What round 65 licenses is therefore very narrow: at a prompt of roughly twenty tokens, `q8_0`/`q4_1` costs 3.8% and `q4_0`/`q4_1` costs 6.1%, with coherent output. That is a statement about overhead at zero depth, not about serving.
 
-### Round 70: at real depth, llama.cpp's KV quant is *worse* than vLLM's
+### Round 70: the full depth matrix, and production is on the wrong setting
 
-Round 70 re-measured with `llama-bench -d`, which prefills *N* tokens of KV and then times generation — the same quantity as vLLM's TPOT-vs-context curve. The result reverses the conclusion round 65 invited:
+Round 70 re-measured with `llama-bench -d`, which prefills *N* tokens of KV and then times generation — the same quantity as vLLM's TPOT-vs-context curve. Every (arm, depth) pair ran as its own process, so a blank is a real failure at that depth and not collateral from another cell.
 
-| depth | `q8_0`/`q8_0` | `q8_0`/`q4_1` | ratio | vLLM turboquant, same depth |
-|---:|---:|---:|---:|---:|
-| 8,192 | 71.03 tok/s | 35.07 tok/s | **0.494×** | 0.678× |
-| 32,768 | 61.79 tok/s | 15.11 tok/s | **0.245×** | ~0.425× |
+Decode tok/s, production Coder-Next 80B Q4_K_M, ratios against `q8_0`/`q8_0` at the same depth:
 
-Quantizing the V cache costs **51% at depth 8,192** — not 3.8%. By 32,768 it is down to a quarter of baseline, which is *worse* than turboquant on vLLM at comparable depth. The `-3.8%` was measuring overhead against an empty cache and nothing else.
+| arm | 8,192 | 32,768 | 65,536 | 98,304 | 130,000 |
+|---|---:|---:|---:|---:|---:|
+| `q8_0`/`q8_0` (production) | 71.03 | 61.79 | 52.87 | 45.78 | 40.17 |
+| `q8_0`/`q4_1` | 35.07 (0.494×) | 15.11 (0.245×) | timeout | timeout | timeout |
+| `q4_0`/`q4_1` | 39.88 (0.561×) | 17.25 (0.279×) | timeout | timeout | timeout |
+| **`f16`/`f16`** | **76.41 (1.076×)** | **71.95 (1.164×)** | **69.16 (1.308×)** | **64.99 (1.420×)** | **62.89 (1.566×)** |
 
-**`q4_1` is not a production recommendation.** Production runs `q8_0`/`q8_0` today and should continue to.
+Three findings, in ascending order of how much they matter.
 
-The cross-stack conclusion is now consistent across two independent engines and four KV quantizers: **on gfx90a, compressing KV costs at least half of decode speed at real depth, and the cost compounds as depth grows.** No implementation measured here escapes it.
+**1. `q4_1` V-cache does not merely cost — it stops working.** 51% at depth 8,192, 75% at 32,768, and beyond that it cannot produce 32 tokens within 25 minutes. For scale, `q8_0`/`q8_0` completed all five depths in 3.4 minutes total. The −3.8% from round 65 was measuring overhead against an empty cache and nothing else.
 
-### What uncompressed llama.cpp does at depth — the actually good news
+**2. The entire penalty is the V cache; quantizing K is free.** `q8_0`/`q4_1` and `q4_0`/`q4_1` differ *only* in K precision, and the 4-bit-K arm is slightly **faster** (39.88 vs 35.07). Both collapse identically because both carry `q4_1` V. vLLM shows the same asymmetry — `turboquant_k8v4` (fp8 K) and `turboquant_4bit_nc` (4-bit K) landed within 0.2% of each other. Two independent engines, same conclusion: **K is cheap to quantize, V is not.**
 
-The `q8_0`/`q8_0` column above is the surprise:
+**3. `f16` beats production's `q8_0`/`q8_0` at every depth, and the gap widens.** 1.076× at 8,192 rising to **1.566× at 130,000**. Production is running a KV quantization that *costs* 57% of decode speed at long context.
 
-| depth | tok/s | vs d=8,192 |
-|---:|---:|---:|
-| 8,192 | 71.03 | 1.000× |
-| 32,768 | 61.79 | 0.870× |
-| 65,536 | 52.87 | 0.744× |
-| 98,304 | 45.78 | 0.644× |
-| 130,000 | **40.17** | 0.565× |
+That third result inverts the premise the setting rests on. Quantized KV is supposed to trade a little compute for less memory traffic. On gfx90a the dequant work exceeds the bandwidth saved, and the deficit compounds with depth. Even `q8_0` — the mildest option available — loses.
 
-**40.17 tok/s at 130,000 tokens of depth, on an 80B model.** vLLM bf16 manages 41.9 tok/s at the same depth on a **35B**. The production stack is doing more than twice the model for the same speed.
+`f16` also decays far more gracefully: **0.823×** across a 16× depth increase, against `q8_0`/`q8_0`'s 0.565×.
+
+The cross-stack conclusion is now consistent across two engines and five KV configurations: **on gfx90a, quantizing the V cache costs at least half of decode at real depth, and the cost compounds. Uncompressed KV is both faster and better-behaved.**
+
+### The production recommendation
+
+`llama-swap-config.yaml` passes `-ctk q8_0 -ctv q8_0` for three models. **Switch them to `-ctk f16 -ctv f16`.** Expected: 1.08–1.31× decode across the configured context sizes, at zero quality cost — f16 is the exact baseline, not an approximation.
+
+The constraint is VRAM: f16 KV is ~1.88× the size of `q8_0`. Two facts bound the risk:
+
+- Round 70 ran f16 to **depth 130,000** on the 48.5 GB model without allocation trouble, so it fits comfortably at that scale.
+- Of the configured contexts, four are `-c 65536` and two are `-c 32768` — all well inside what was demonstrated.
+
+The two outliers, `-c 196608` and `-c 262144`, are **not** covered by this measurement and should be tested before switching. Those are the cases where `q8_0` K may still earn its place — and note finding 2 above: `-ctk q8_0 -ctv f16` is likely the right compromise there, since K quantization is nearly free and V quantization is what hurts. That combination was not measured and is the obvious next round.
+
+### What uncompressed llama.cpp does at depth
+
+**62.89 tok/s at 130,000 tokens of depth, on an 80B model.** vLLM bf16 manages 41.9 tok/s at the same depth on a **35B**. The production stack is doing more than twice the model at 1.5× the speed.
 
 That is the real path to long context on this box: uncompressed KV plus enough VRAM, on either stack. Not compression.
 
@@ -183,8 +196,9 @@ Active KV must be VRAM-resident. There is no `-ngl`-style dial. Given the 902,16
 
 | want | on vLLM | on llama.cpp |
 |---|---|---|
-| ≤256K context, max speed | `bf16` — 902K tokens is plenty | `q8_0`/`q8_0` today |
-| ≤256K, more concurrent streams | `bf16`; capacity is not binding | stay on `q8_0`/`q8_0` — `q4_1` costs 51% at depth 8K |
+| ≤130K context, max speed | `bf16` — 902K tokens is plenty | **switch to `f16`/`f16`** — 1.08–1.57× over the `q8_0` in use today |
+| ≤130K, more concurrent streams | `bf16`; capacity is not binding | `f16` if VRAM allows, else `-ctk q8_0 -ctv f16` (untested) |
+| 196K–262K context | `bf16` covers it | `f16` VRAM unverified at these sizes — test before switching |
 | 1M context | `turboquant_4bit_nc` fits it, at ~1 tok/s | untested at this length |
 
 The honest summary: **1M context on vLLM is technically reachable on this box and practically unusable.** The capacity is real and measured — 2.79M KV tokens. But turboquant's decode penalty grows with context rather than amortizing, and by 130K it is already down to 8.0 tok/s per stream. A 1M context that generates at ~1 tok/s is not a serving configuration.
@@ -195,7 +209,7 @@ This is worth stating flatly because the capacity number alone reads like a win.
 
 **Compression is not the route to 1M on either stack.** That was the working assumption when these rounds started, and every arm measured refutes it — turboquant, `turboquant_k8v4`, `int8_per_token_head`, `q8_0`/`q4_1`, `q4_0`/`q4_1`. Four quantizers, two engines, two independent implementations of flash attention, and the cheapest of them still costs half of decode at depth. This is not one bad kernel; it is a consistent property of quantized-KV attention on gfx90a.
 
-**The route to 1M is uncompressed KV plus VRAM.** Round 70's `q8_0`/`q8_0` column is the evidence: 40.17 tok/s at 130,000 tokens of depth on an 80B model, decaying gracefully (0.565× across a 16× depth increase) rather than falling off a cliff. vLLM bf16 behaves the same way — its TPOT slope *falls* with depth.
+**The route to 1M is uncompressed KV plus VRAM.** Round 70's `f16`/`f16` column is the evidence: 62.89 tok/s at 130,000 tokens of depth on an 80B model, decaying gracefully (0.823× across a 16× depth increase) rather than falling off a cliff. vLLM bf16 behaves the same way — its TPOT slope *falls* with depth. Uncompressed KV is not the compromise here; it is the fast path.
 
 That reframes the arithmetic. bf16 on vLLM holds 902,160 KV tokens and a 1M context needs 1,000,000 — **10.8% short, not 3× short**. The serve script runs `--gpu-memory-utilization 0.90`. Closing an 11% gap by raising that ceiling or trimming weights is a far better bet than a 3× compression that costs 5× the decode speed, and it keeps the numerics exact. That is the experiment worth running next, and it has not been run.
 
