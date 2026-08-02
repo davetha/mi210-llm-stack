@@ -49,14 +49,21 @@ All `noquant{Fp16,Bf16}`, all `g1u0`, all `32x512` (`docs/33`). So: **unquantize
 bf16/fp16 experts only**, plus `VLLM_ROCM_USE_AITER_MOE=1`, which this stack had
 been setting to `0` by hand.
 
-> **CORRECTED 2026-08-01 — see `docs/48`.** "unquantized bf16/fp16 experts" is
-> wrong. All 8 objects belong to the **fp16 family** (`fmoe_fp16_*`); gfx90a has
-> **zero** `fmoe_bf16_*` objects, against 202 on gfx942 and 224 on gfx950. Of
-> the 23 gfx90a `fmoe` config tables, only two have any rows —
-> `fmoe_fp16_noquant_g1u0_{silu,gelu}.csv`. Every bf16 table, every int8 table
-> and every fp8 table is header-only. The two `fp16_noquantBf16` objects are
-> reachable **only through the fp16-family table**, so they do not make a bf16
-> checkpoint eligible.
+> **CORRECTED 2026-08-02 — see `docs/49`.** "unquantized bf16/fp16 experts" is
+> wrong, though not for the reason first given here. All 8 gfx90a objects **do**
+> perform bf16 matrix multiply (`v_mfma_f32_16x16x16bf16_1k`); the `fp16` in
+> their filenames is the **output/atomic accumulation** dtype, not the compute
+> dtype. `fmoe_{A}_noquant{B}` = A output, B weight.
+>
+> The operative constraint is not the inventory but the dispatcher: for
+> unquantized `g1u0` MoE it keys on **input dtype** and asks for `fmoe_f16.co`
+> (fp16, **present**) or `fmoe_b16.co` (bf16, **missing**). A bf16 checkpoint is
+> ineligible because that one file was not shipped — and separately, CDNA2
+> cannot encode `global_atomic_pk_add_bf16`, which is what a true bf16 FLAT
+> kernel accumulates with.
+>
+> An earlier version of this banner blamed "the entire `fmoe_bf16_*` family
+> being absent". That was an inventory observation mistaken for a mechanism.
 
 ### ROOT CAUSE, 2026-07-30 — one upstream predicate explains all of it
 
