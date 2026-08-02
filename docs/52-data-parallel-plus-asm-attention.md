@@ -134,3 +134,81 @@ rows begin with digits and matched none of the patterns in the `grep` used to
 read the log. The script was correct; the reading of it was not. Worth
 recording because the same mistake nearly produced a "the analysis block is
 broken" entry here.
+
+## Round 62: decode is latency-bound, not bandwidth- or issue-bound
+
+The question that governs what is worth working on next. `docs/39` item 1c put
+the decode gap at ~3×; round 38e proved it is 99.9% in-kernel; `docs/30` argued
+the machine is issue-bound. But achieved bandwidth had never been measured, so
+"issue-bound" was an inference from instruction counts rather than a measurement
+of the alternative.
+
+`rocprof-compute`, which `docs/39` scoped the whole approach around, is **absent
+from the image and not pip-installable**. `round62_decode_roofline_counters.sh`
+computes the two numbers by hand from `rocprofv3 --pmc` counters instead.
+
+```
+TCC_EA_RDREQ    22,420,274,740     GRBM_GUI_ACTIVE  18,246,064,664 cycles
+TCC_EA_WRREQ     2,299,641,729     SQ_INSTS_VALU   283,276,941,895
+                                   SQ_WAVES           321,083,154
+
+bytes = (22.42e9 + 2.30e9) x 64 B = 1582 GB
+busy  = 18.25e9 cycles / 1.30 GHz = 14.0 s
+```
+
+| resource | measured | ceiling | utilisation |
+|---|---:|---:|---:|
+| HBM bandwidth | **113 GB/s** | 1170 GB/s (`docs/20` practical) | **~10%** |
+| VALU issue | 15.5 inst/cycle | ~104 (wave64, 104 CU) | **~15%** |
+
+**Neither resource is saturated**, which refines `docs/30` rather than
+confirming it. Batch-1 decode is **latency/occupancy-bound**: there is not
+enough concurrent work in flight to keep either the memory system or the issue
+units busy. That is consistent with the megakernel literature `docs/39` cites —
+stock engines at batch 1 running near half of achievable bandwidth on
+*well-supported* CUDA hardware — and this box is a worse instance of that known
+problem rather than a special case.
+
+**Consequences.** The kernel-level leads in `docs/50` and `docs/51` were not
+doomed by a bandwidth wall. But making an individual kernel faster cannot help
+much when both resources sit near idle either. The lever is **more concurrent
+work per step**:
+
+- it is why DP=2 + ASM attention (1.118×) worked — DP removes ~96 serialising
+  collectives per step, and the ASM kernel then has a larger share to improve;
+- it is why the int8 fusion gaps remain worth pursuing — fusion removes a
+  *dependent pass*, shortening the critical path, rather than speeding up a
+  saturated unit;
+- it argues against further single-kernel micro-optimisation at batch 1.
+
+### Caveats, stated because the numbers invite over-reading
+
+1. The counters span the **whole profiled process** — two prefills and two
+   128-token generates — not steady-state decode in isolation.
+2. The profiled pass ran at **12.52 tok/s against 61.13 un-profiled**, so
+   rocprofv3 distorts the timing it measures.
+3. Sustained clock was taken as 1.30 GHz from `docs/51`; the derived seconds
+   move ±5% across the measured 1235–1375 MHz range.
+
+The order of magnitude is sound — 10% and 15% are not going to become 90% under
+any plausible correction. The precise figures are not.
+
+### Four attempts, and the one that should have come first
+
+| # | hypothesis | outcome |
+|---|---|---|
+| 1 | — | `tail -5` hid the marker; `_sum` names are derived expressions, not raw `--pmc` names; `grep -c \|\| echo 0` reproduced the `"0\n0"` bug from `docs/50` |
+| 2 | vLLM SIGTERMs the profiler | signal was real, but not the cause |
+| 3 | graceful teardown fixes it | `ENGINE_DOWN` twice, **still zero CSVs** |
+| 4 | kernels run in a spawned subprocess | **confirmed** by control test |
+
+The control test — `--pmc` on a 20-line in-process matmul — wrote counters
+immediately, isolating the variable in about a minute: counters, flags, output
+format and directory all worked, and what differed was that vLLM runs GPU work
+in a spawned `EngineCore`/`Worker` process while rocprofv3 traces the parent.
+Fix: `VLLM_ENABLE_V1_MULTIPROCESSING=0`.
+
+**Validity of that fix was checked rather than assumed.** In-process pass 1
+measured 61.13 tok/s against 61.41 and 61.20 from the multiprocess runs — within
+0.5%, so the profiled configuration is equivalent to the one being reasoned
+about.

@@ -95,6 +95,7 @@ docker run --rm --name probe-rd62 \
   --security-opt seccomp=unconfined --ipc=host --shm-size 32G \
   -v "$BASE":"$BASE" -v "$LOGS":/logs \
   -e HSA_NO_SCRATCH_RECLAIM=1 -e VLLM_ROCM_USE_AITER_LINEAR=1 -e VLLM_PREFER_AITER_FA=1 \
+  -e VLLM_ENABLE_V1_MULTIPROCESSING=0 \
   --entrypoint bash "$IMG" -c '
 set -o pipefail
 python3 /logs/rd62-aiter-patch.py || exit 1
@@ -118,12 +119,16 @@ dt = time.time() - t0
 n = len(out[0].outputs[0].token_ids)
 print(f"PROFILE_MARK tokens={n} seconds={dt:.3f} tok_s={n/dt:.2f}", flush=True)
 
-# SHUT THE ENGINE DOWN BEFORE THE PROFILER FINALISES. Attempt 2 of this round
-# produced both PROFILE_MARK lines and ZERO counter CSVs: the vLLM process
-# manager force-kills its engine subprocesses at interpreter exit, the SIGTERM
-# reaches the whole process group, and rocprofv3 dies (caught signal 15)
-# before flushing. Dropping the LLM and collecting first lets vLLM tear down
-# cleanly, so the profiler sees a normal exit and gets to write output.
+# Graceful teardown. Attempt 2 died with rocprofv3 catching signal 15 as the
+# vLLM process manager force-killed its children at interpreter exit, so this
+# drops the LLM first. That fixed the signal but NOT the missing counters --
+# attempt 3 exited cleanly (ENGINE_DOWN printed twice) and still produced zero
+# CSVs. The real cause was found by testing --pmc on a trivial in-process
+# matmul, which wrote counters fine: vLLM runs its GPU work in a SPAWNED
+# EngineCore/Worker subprocess, and rocprofv3 traces the parent, so the kernels
+# were never in the profiled process at all. Hence
+# VLLM_ENABLE_V1_MULTIPROCESSING=0 on the container, which keeps the engine
+# in-process. Keeping the graceful teardown regardless -- it is correct.
 # NO APOSTROPHES IN THIS BLOCK: it lives inside a single-quoted bash -c.
 del llm
 import gc
@@ -172,7 +177,12 @@ for f in files:
             except ValueError: pass
 for k in sorted(tot):
     print(f"  {k:<24} {tot[k]:,.0f}")
-rd, wr = tot.get("TCC_EA_RDREQ_sum", 0), tot.get("TCC_EA_WRREQ_sum", 0)
+# Raw counter names, NOT the _sum forms. --pmc collects raw counters, so the
+# CSV carries "TCC_EA_RDREQ"; the _sum spellings are derived-expression
+# names from --list-avail. Attempt 4 collected counters successfully and
+# then printed no derivation because these lookups still said _sum and
+# silently returned 0.
+rd, wr = tot.get("TCC_EA_RDREQ", 0), tot.get("TCC_EA_WRREQ", 0)
 busy = tot.get("GRBM_GUI_ACTIVE", 0)
 if rd and busy:
     gb = (rd + wr) * 64 / 1e9
@@ -180,9 +190,30 @@ if rd and busy:
         sec = busy / (mhz * 1e6)
         print(f"  @ {mhz} MHz: {sec*1000:8.2f} ms busy -> {gb/sec:8.1f} GB/s "
               f"({gb/sec/1170*100:5.1f}% of the 1.17 TB/s practical ceiling)")
+    valu, waves = tot.get("SQ_INSTS_VALU", 0), tot.get("SQ_WAVES", 0)
+    if valu and busy:
+        ipc = valu / busy
+        # wave64 on 104 CUs x 4 SIMDs: a wave64 VALU op occupies its 16-wide
+        # SIMD for 4 cycles, so sustained issue is ~104 instructions/cycle.
+        print(f"  VALU issue     : {ipc:8.2f} inst/cycle of ~104 peak "
+              f"({ipc/104*100:5.1f}% of issue capacity)")
+        print(f"  waves launched : {waves:,.0f}")
     print()
-    print("  ~90%+ of ceiling  -> bandwidth-bound; only moving fewer bytes helps,")
-    print("                       and every kernel lead in docs/50-51 was doomed.")
-    print("  ~30-50% of ceiling-> issue-bound, confirming docs/30; fusion and")
-    print("                       instruction-count work is the right direction.")
+    print("  READ BOTH NUMBERS TOGETHER -- bandwidth alone cannot tell")
+    print("  issue-bound from latency-bound:")
+    print("    bandwidth ~90%+                -> bandwidth-bound; only moving")
+    print("                                      fewer bytes helps.")
+    print("    bandwidth low, issue ~high     -> issue-bound, per docs/30;")
+    print("                                      fusion is the right direction.")
+    print("    BOTH low                       -> latency/occupancy-bound: not")
+    print("                                      enough concurrent work to keep")
+    print("                                      either resource busy. The lever")
+    print("                                      is more work per step, not")
+    print("                                      faster kernels.")
+    print()
+    print("  CAVEAT: these counters span the WHOLE profiled process -- two")
+    print("  prefills and two generates -- not steady-state decode alone. And")
+    print("  the profiled pass runs ~5x slower than un-profiled, so rocprofv3")
+    print("  distorts what it measures. Treat the order of magnitude as sound")
+    print("  and the precise figure as not.")
 PY
