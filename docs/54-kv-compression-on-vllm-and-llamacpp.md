@@ -104,7 +104,7 @@ The type alias and the CLI disagree. Enumerating the type overstates what can ac
 
 **With both vLLM KV quantizers measured and both unaffordable, the conclusion is not about a flag choice. vLLM has no usable KV compression on gfx90a today.**
 
-## llama.cpp does the same job for a twentieth of the price
+## llama.cpp looked twenty times cheaper, and wasn't
 
 Round 65, on the **production** Coder-Next Q4_K_M model, same box:
 
@@ -124,9 +124,38 @@ Round 65 ran `--ctx-size 32768`, but that is the *allocation*, not the load. The
 
 Rounds 66/67 established that KV-quant cost is strongly context-dependent — turboquant went 1.48× → 5.21× across a 16× context span. Comparing a llama.cpp number taken at ~0 tokens of KV against a vLLM number taken at 8K, and then against one taken at 130K, compares three different regimes.
 
-What round 65 actually licenses is narrower and still useful: **on the production stack, at short context, `q8_0`/`q4_1` costs 3.8% and `q4_0`/`q4_1` costs 6.1%, with coherent output.** That covers ordinary chat traffic, where prompts are short and this is the regime production runs in.
+What round 65 licenses is therefore very narrow: at a prompt of roughly twenty tokens, `q8_0`/`q4_1` costs 3.8% and `q4_0`/`q4_1` costs 6.1%, with coherent output. That is a statement about overhead at zero depth, not about serving.
 
-It does **not** establish that llama.cpp's KV quant holds up at 130K, which is exactly where vLLM's fell apart. Round 69 measures that; until it reports, the cross-stack comparison is open. Recording it as settled here would repeat `docs/50`'s mistake in a new place.
+### Round 70: at real depth, llama.cpp's KV quant is *worse* than vLLM's
+
+Round 70 re-measured with `llama-bench -d`, which prefills *N* tokens of KV and then times generation — the same quantity as vLLM's TPOT-vs-context curve. The result reverses the conclusion round 65 invited:
+
+| depth | `q8_0`/`q8_0` | `q8_0`/`q4_1` | ratio | vLLM turboquant, same depth |
+|---:|---:|---:|---:|---:|
+| 8,192 | 71.03 tok/s | 35.07 tok/s | **0.494×** | 0.678× |
+| 32,768 | 61.79 tok/s | 15.11 tok/s | **0.245×** | ~0.425× |
+
+Quantizing the V cache costs **51% at depth 8,192** — not 3.8%. By 32,768 it is down to a quarter of baseline, which is *worse* than turboquant on vLLM at comparable depth. The `-3.8%` was measuring overhead against an empty cache and nothing else.
+
+**`q4_1` is not a production recommendation.** Production runs `q8_0`/`q8_0` today and should continue to.
+
+The cross-stack conclusion is now consistent across two independent engines and four KV quantizers: **on gfx90a, compressing KV costs at least half of decode speed at real depth, and the cost compounds as depth grows.** No implementation measured here escapes it.
+
+### What uncompressed llama.cpp does at depth — the actually good news
+
+The `q8_0`/`q8_0` column above is the surprise:
+
+| depth | tok/s | vs d=8,192 |
+|---:|---:|---:|
+| 8,192 | 71.03 | 1.000× |
+| 32,768 | 61.79 | 0.870× |
+| 65,536 | 52.87 | 0.744× |
+| 98,304 | 45.78 | 0.644× |
+| 130,000 | **40.17** | 0.565× |
+
+**40.17 tok/s at 130,000 tokens of depth, on an 80B model.** vLLM bf16 manages 41.9 tok/s at the same depth on a **35B**. The production stack is doing more than twice the model for the same speed.
+
+That is the real path to long context on this box: uncompressed KV plus enough VRAM, on either stack. Not compression.
 
 ## KIVI does not apply here, for two separate reasons
 
@@ -155,19 +184,37 @@ Active KV must be VRAM-resident. There is no `-ngl`-style dial. Given the 902,16
 | want | on vLLM | on llama.cpp |
 |---|---|---|
 | ≤256K context, max speed | `bf16` — 902K tokens is plenty | `q8_0`/`q8_0` today |
-| ≤256K, more concurrent streams | `bf16`; capacity is not binding | **`q8_0`/`q4_1`, −3.8%** — recommended |
+| ≤256K, more concurrent streams | `bf16`; capacity is not binding | stay on `q8_0`/`q8_0` — `q4_1` costs 51% at depth 8K |
 | 1M context | `turboquant_4bit_nc` fits it, at ~1 tok/s | untested at this length |
 
 The honest summary: **1M context on vLLM is technically reachable on this box and practically unusable.** The capacity is real and measured — 2.79M KV tokens. But turboquant's decode penalty grows with context rather than amortizing, and by 130K it is already down to 8.0 tok/s per stream. A 1M context that generates at ~1 tok/s is not a serving configuration.
 
 This is worth stating flatly because the capacity number alone reads like a win. Reporting "3.09× more KV" without the slope would have been true and thoroughly misleading.
 
-Two things follow. **256K is comfortable today** — bf16 holds 902K tokens, needs no compression, and is the fast path. **1M needs different hardware or a different KV implementation**, not a different flag. The measured gap between llama.cpp's −3.8% and vLLM's −80% at 130K is an implementation gap, so a better vLLM KV kernel is possible in principle; it just doesn't exist today.
+**256K is comfortable today.** bf16 holds 902,160 tokens, needs no compression, and is the fast path. This was the answer to the original question all along, and it required no work.
 
-The useful near-term result is round 65: llama.cpp gives up ~4% for a large V-cache reduction, and that one is close to free.
+**Compression is not the route to 1M on either stack.** That was the working assumption when these rounds started, and every arm measured refutes it — turboquant, `turboquant_k8v4`, `int8_per_token_head`, `q8_0`/`q4_1`, `q4_0`/`q4_1`. Four quantizers, two engines, two independent implementations of flash attention, and the cheapest of them still costs half of decode at depth. This is not one bad kernel; it is a consistent property of quantized-KV attention on gfx90a.
+
+**The route to 1M is uncompressed KV plus VRAM.** Round 70's `q8_0`/`q8_0` column is the evidence: 40.17 tok/s at 130,000 tokens of depth on an 80B model, decaying gracefully (0.565× across a 16× depth increase) rather than falling off a cliff. vLLM bf16 behaves the same way — its TPOT slope *falls* with depth.
+
+That reframes the arithmetic. bf16 on vLLM holds 902,160 KV tokens and a 1M context needs 1,000,000 — **10.8% short, not 3× short**. The serve script runs `--gpu-memory-utilization 0.90`. Closing an 11% gap by raising that ceiling or trimming weights is a far better bet than a 3× compression that costs 5× the decode speed, and it keeps the numerics exact. That is the experiment worth running next, and it has not been run.
 
 ## Method note
 
 Round 66 reported `0.00` for its 131,072-token row and I initially read it as a measurement. It wasn't — the server ran `--max-model-len 131072` while the benchmark asked for `--random-input-len 131072 --random-output-len 64`, so prompt plus generation exceeded the window and all four requests were rejected on both arms. A zero that means "nothing ran" looks exactly like a zero that means "infinitely slow".
 
 Round 67 reserves headroom for the generation and the chat template, refuses to start if the arithmetic doesn't clear, and prints the failed-request count *before* any timing so an empty run announces itself. This is the same lesson as [`docs/50`](50-the-five-leads-measured.md)'s: a number produced by a broken run is worse than no number, because it gets tabulated.
+
+Round 69 then made a different version of the same mistake. It asked `llama-bench` for all three depths in **one invocation**, and all four arms died with a GPU memory access fault. Because `llama-bench` writes its CSV at exit, the crash at the deepest point destroyed the completed rows for the shallower ones — four arms, twenty-three minutes, zero usable numbers. Worse, the fault invited the conclusion that llama.cpp had hit a capacity ceiling at 130K.
+
+It had not. Round 70 ran every (arm, depth) pair as its own process, and `q8_0`/`q8_0` completed 130,000 cleanly at 40.17 tok/s. The ceiling was an artifact of batching the cells together. **A harness that discards good data when one point fails will eventually discard the data the round existed to collect** — and the failure will look like a finding about the hardware.
+
+Round 70 also separates the three ways a cell can return nothing (timeout, GPU fault, OOM) instead of reporting them all as "no rows", because round 69 reported a harness defect in language that sounded like a hardware limit.
+
+### The correction this document exists to record
+
+Round 65's `-3.8%` was the most quotable number in this investigation and it was nearly published as a cross-stack comparison. It was measured with a ~20-token prompt against an essentially empty KV cache. The same configuration at depth 8,192 costs **51%**, and at 32,768 costs **75%**.
+
+The error would not have been in the measurement — round 65's number is reproducible and correct for what it measured. It would have been in the comparison: setting a zero-depth llama.cpp number beside an 8K-depth vLLM number and reporting the ratio as if the two were the same experiment. Rounds 66 and 67 had *already* established that KV-quant cost is strongly depth-dependent, which is precisely what made the comparison illegal.
+
+The general form: **before comparing two numbers, check that they were produced by the same shape of experiment.** A flag that is set (`--ctx-size 32768`) is not the same as a condition that obtains (32,768 tokens actually resident).
