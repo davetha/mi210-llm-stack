@@ -87,6 +87,18 @@ Validity proven both directions: `rd57-asm` loaded
 **Item 1 closes. Do not change the constant.** The carve-out is kept as an
 instrument, not a setting.
 
+> **QUALIFIED 2026-08-02 — see `docs/52`.** This was measured entirely at TP=2,
+> and the conclusion holds only for that shape. Round 61 ran the same kernel
+> under TP=1 (each replica owning all 32 heads instead of 16) and measured it
+> worth **~6%**, five times the 1.008–1.013× seen here. Head count does not
+> explain the difference — conc 32 at TP=2 and conc 16-per-replica at TP=1 both
+> give 512 heads. The likely cause is Amdahl: at TP=2 the ~96 host-staged
+> collectives per decode step contribute 8.25 ms/token of fixed cost that
+> dilutes any attention-kernel gain, and removing them makes attention a much
+> larger share of what remains. So the constant is correctly calibrated *for the
+> TP=2 configuration it was tested in*; the ASM kernel's value depends on what
+> else competes for the decode step.
+
 ## 3 — the int8 fusion pass matches nothing
 
 `docs/46` established that vLLM's `rms_quant_fusion.py` registry is FP8/FP4 only
