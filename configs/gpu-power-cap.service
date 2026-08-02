@@ -1,0 +1,34 @@
+[Unit]
+# Persist the MI210 sustained power cap across reboots.
+#
+# power1_cap is sysfs and resets to the card default (200 W) on every boot, so
+# the 250 W setting measured in docs/53 needs re-applying each time. This unit
+# does that once at boot and exits.
+#
+# ORDERING. amdgpu must have created /sys/class/drm/card*/device/hwmon/* before
+# the script can find anything, hence the sysinit dependency. The script itself
+# exits non-zero if it finds no MI210, so a too-early run fails loudly rather
+# than silently leaving the cards at 200 W.
+#
+# This deliberately does NOT depend on the docker or vllm units -- the cap is a
+# property of the hardware, not of whatever happens to be serving.
+Description=Set MI210 GPU sustained power cap
+Documentation=https://github.com/davetha/mi210-llm-stack docs/53
+After=sysinit.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Change this to re-tune. 200 = card default, 300 = power1_cap_max.
+# docs/53: 250W gives +2.9% prefill, 300W gives +8.4%, decode flat at both.
+Environment=GPU_POWER_CAP_WATTS=250
+ExecStart=/usr/local/sbin/set-gpu-power-cap.sh
+# On stop, hand the cards back to their default rather than leaving a value
+# behind that nothing is managing.
+ExecStop=/usr/local/sbin/set-gpu-power-cap.sh 200
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
