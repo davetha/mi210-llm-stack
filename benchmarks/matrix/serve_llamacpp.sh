@@ -62,8 +62,21 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 # kernels were built for the default, so turning XNACK on for every container
 # could quietly make them unloadable on the vLLM arms.
 # shellcheck disable=SC2086
+# LLAMA_NO_LOCAL_GPU=1 omits the GPU devices entirely. Required for an --rpc
+# arm: production gives its main llama-server NO --device flags, so all compute
+# goes through the rpc-servers. Leaving them in makes llama.cpp enumerate the 2
+# local ROCm devices AND the 2 RPC backends -- four backends over two physical
+# cards, double-allocating them. Measured consequence: prefill 0.658x and then
+# a GPU VM fault (rocr VMFaultHandler assertion) partway through long context.
+if [ "${LLAMA_NO_LOCAL_GPU:-0}" = "1" ]; then
+    DEV_FLAGS=""
+else
+    DEV_FLAGS="--device /dev/kfd --device /dev/dri"
+fi
+
+# shellcheck disable=SC2086
 docker run -d --name "$NAME" \
-  --device /dev/kfd --device /dev/dri \
+  $DEV_FLAGS \
   --group-add 44 --group-add 991 \
   `# numeric gids: --group-add resolves names in the CONTAINER's /etc/group` \
   ${LLAMA_EXTRA_ENV:-} \

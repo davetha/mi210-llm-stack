@@ -165,6 +165,14 @@ flag.
 
 ## What this leaves
 
+> **CORRECTED 2026-08-01 — see `docs/48`.** The claim below rests on
+> enumerating `is_*_enabled` gates, and that pattern is incomplete: there are
+> **23** `@if_aiter_supported` methods, not 17. Two of the six the pattern
+> skipped gated real functionality — `are_gdn_triton_kernels_available` (an
+> entire GDN forward path) and `get_moe_dispatch_policy`. Both have since been
+> carved out and measured (rounds 49 and 50); both are nulls, so the conclusion
+> stands, but "surveyed and closed" was not earned at the time it was written.
+
 The AITER surface is now **surveyed and closed**: of 17 gates, two are live and
 winning (`mha` → 1.19–1.33× prefill, `linear` → 1.48× decode), one runs and
 loses (`moe`), four are provably inert, and the rest are FP8/FP4/MLA paths this
@@ -174,7 +182,7 @@ Remaining decode targets, and none of them is an AITER flag:
 
 | target | ms | % | note |
 |---|---:|---:|---|
-| MoE cluster | 2560 | 32% | **Closed via AITER** (rounds 42–43): the flag is a wash at TP=1 and 0.977× at TP=2, and does not reach the ASM kernels. One untested idea remains — see below |
+| MoE cluster | 2560 | 32% | **Closed via AITER** (rounds 42–43): the flag is a wash at TP=1 and 0.977× at TP=2, and does not reach the ASM kernels. One untested idea remains — see below. **Round 50 reproduced 0.977× exactly, so it is a real ~2.3% regression, not an inconclusive one; and the reason it never reaches ASM is that every bf16-activation `fmoe` table on gfx90a is header-only — `docs/48`** |
 | `paged_attention_ll4mi` | 1045 | 13.1% | `pa_fwd_asm` has **no call site** in vLLM (`docs/37` §5); wiring one is real work, and `docs/18` shows the kernels are numerically exact |
 | `wvSplitK` | 680 | 8.5% | no AITER int8 equivalent |
 | `dynamic_scaled_int8_quant` | 498 | 6.2% | separate kernel per GEMM; `fuse_norm_quant` describes itself as fp8-only, so int8 activation quant may have no fusion path at all — **unexamined, and the most concrete remaining lead** |

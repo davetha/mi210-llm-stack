@@ -1,0 +1,65 @@
+# llama.cpp built with GGML_RPC=ON, restoring the image production requires and
+# making the RPC-vs-native A/B possible.
+#
+# WHY IT IS MISSING. /mnt/llm-storage/llama-swap-config.yaml launches every
+# model from `llama-rocm714-rpc:latest`, and that image is not on the host.
+# `ggml/CMakeLists.txt:247` shows why the surviving build cannot substitute:
+#
+#     option(GGML_RPC "ggml: use RPC" OFF)
+#
+# It is OFF by default, `tools/rpc` is only added when it is ON, and
+# llama-rocm714:latest was built with `cmake --build build -t llama-server` --
+# the server target alone. So neither the flag nor the target was ever used, and
+# `ggml-rpc-server` exists in no image on this box. See docs/47.
+#
+# BASED ON THE BASELINE IMAGE, NOT A FRESH CLONE -- the same reasoning as
+# configs/Dockerfile.llama-forcemmq. rocm714-dev:latest is gone, and the
+# original build used `git clone --depth 1`, i.e. whatever master was that day.
+# Rebuilding from a new clone would vary the source tree and the flag at once.
+# Building FROM llama-rocm714:latest reuses the exact tree the production
+# binaries came from -- /src is present at commit
+# 67b9b0e7f6ce45d929a4411907d3c48ec719e81c, verified -- so the source is
+# identical by construction and no network fetch can drift or fail.
+#
+# HOW THE A/B USES THIS. Both arms run THIS image and THIS binary. The native
+# arm simply omits `--rpc`; the RPC arm starts two ggml-rpc-server containers,
+# one pinned per card, exactly as production did. That isolates the RPC hop as
+# the single variable. Comparing this image against llama-rocm714:latest
+# instead would vary the compile flag AND the transport together, and any
+# difference would be unattributable -- the same mistake
+# Dockerfile.llama-forcemmq was written to avoid.
+FROM llama-rocm714:latest
+ENV ROCM_PATH=/opt/rocm PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}
+
+# A separate build directory, not a reconfigure of build/. Toggling the option
+# in place would recompile only what cmake thinks is stale, and a missed
+# dependency edge would leave non-RPC objects linked into the result.
+RUN cd /src && \
+    echo "building from $(git rev-parse HEAD)" && \
+    HIPCXX=/opt/rocm/llvm/bin/clang++ \
+    cmake -S . -B build-rpc -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx90a \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_RPC=ON \
+      -DLLAMA_CURL=OFF -DCMAKE_PREFIX_PATH="/opt/rocm;/usr" \
+      -DCMAKE_HIP_COMPILER_ROCM_ROOT=/opt/rocm && \
+    cmake --build build-rpc --config Release -j"$(nproc)" -t llama-server ggml-rpc-server
+
+# Fail the BUILD, not the benchmark, if the flag did not take or a target did
+# not emit. A silently-missing ggml-rpc-server would surface much later as a
+# connection refused inside an arm, and a silently-ignored GGML_RPC would give
+# an A/B that reports "no difference" for the wrong reason.
+RUN grep -q "GGML_RPC:BOOL=ON" /src/build-rpc/CMakeCache.txt \
+    && echo "verified: GGML_RPC=ON in CMakeCache" \
+    && test -x /src/build-rpc/bin/llama-server \
+    && test -x /src/build-rpc/bin/ggml-rpc-server \
+    && echo "verified: both binaries present" \
+    && /src/build-rpc/bin/llama-server --version 2>&1 | head -2
+
+# Production's launch scripts and this repo's bin/serve_llamacpp.sh both expect
+# the binaries at /src/build/bin/. Point that path at the RPC build so the
+# image is drop-in for the existing llama-swap config without editing it.
+RUN cp /src/build-rpc/bin/llama-server /src/build/bin/llama-server && \
+    cp /src/build-rpc/bin/ggml-rpc-server /src/build/bin/ggml-rpc-server && \
+    test -x /src/build/bin/ggml-rpc-server && echo "verified: /src/build/bin populated"
+
+ENTRYPOINT ["/src/build/bin/llama-server"]
