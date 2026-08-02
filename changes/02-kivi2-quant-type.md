@@ -83,9 +83,19 @@ llama-server -m model.gguf -ctk kivi2 -ctv kivi2 ...
 llama-server -m model.gguf -ctk f16 -ctv f16 -ctk-cpu kivi2 -ctv-cpu kivi2 ...
 ```
 
-KIVI2 is the hardware-agnostic alternative to TurboQuant — same 3.0 bpw but
-works on GPU too (TurboQuant's GPU path is broken on gfx90a; KIVI2's pure-scalar
-path works everywhere).
+KIVI2 is the hardware-agnostic alternative to TurboQuant — same 3.0 bpw, and
+correct on every CPU architecture, where TurboQuant's wave64 path is broken.
+
+**KIVI2 is CPU-only.** An earlier version of this line claimed it "works on GPU
+too". It does not. "Pure scalar C" means architecture-agnostic, not
+GPU-capable — every one of the nine files in the table above is host-side
+(`ggml-quants.c`, `ggml-cpu/*`), and no CUDA or HIP backend defines a KIVI2
+dequant kernel, so a `GGML_TYPE_KIVI2` tensor has no reader on the device. The
+per-layer example directly above is the tell: it pairs `-ctk-cpu kivi2` with
+`-ctk f16` precisely because the GPU layers must stay fp16.
+
+This is the right tool for CPU-pinned layers re-reading KV from DDR4. It does
+nothing for a `-ngl 999` deployment. See [`docs/54`](../docs/54-kv-compression-on-vllm-and-llamacpp.md).
 
 ## Patch
 
