@@ -1,0 +1,101 @@
+{
+  "label": "rd47-coder-q4",
+  "tier": "80B",
+  "quant": "gguf",
+  "engine": "llamacpp",
+  "workload": "cold16k",
+  "model": "bench",
+  "target_prompt_tokens": 16384,
+  "actual_prompt_tokens": 15144,
+  "ttft_s_median": 5.930378783959895,
+  "ttft_s_min": 5.921518205082975,
+  "ttft_s_max": 5.950445119058713,
+  "implied_prefill_tps_median": 2558.1277428138446,
+  "decode_tps_median": null,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "ACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      25288454144,
+      26841858048
+    ],
+    "total_gb": 52.13
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      25428430848,
+      27045560320
+    ],
+    "total_gb": 52.47
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 5.930378783959895,
+      "total_s": 5.981087596039288,
+      "stream_tokens": 3,
+      "decode_tps": null,
+      "text": "ACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 15144,
+        "total_tokens": 15148,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 0,
+      "marker": "3ef69d810758411c904560a57d47b40f",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785635592.1371174,
+      "actual_prompt_tokens": 15144,
+      "implied_prefill_tps": 2553.6311510085175,
+      "decode_tps_note": "suppressed: only 3 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 5.950445119058713,
+      "total_s": 6.000691366032697,
+      "stream_tokens": 3,
+      "decode_tps": null,
+      "text": "ACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 15240,
+        "total_tokens": 15244,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 1,
+      "marker": "a7290d633abd4f748aaa3b5bf276bff0",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785635598.1203554,
+      "actual_prompt_tokens": 15240,
+      "implied_prefill_tps": 2561.152938153773,
+      "decode_tps_note": "suppressed: only 3 tokens generated, need >=32 for a meaningful rate"
+    },
+    {
+      "ttft_s": 5.921518205082975,
+      "total_s": 5.972089093062095,
+      "stream_tokens": 3,
+      "decode_tps": null,
+      "text": "ACKNOWLEDGED",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 15148,
+        "total_tokens": 15152,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 2,
+      "marker": "687f5d7c9a7b4381a1ec351737309de9",
+      "target_prompt_tokens": 16384,
+      "wall_start": 1785635604.123061,
+      "actual_prompt_tokens": 15148,
+      "implied_prefill_tps": 2558.1277428138446,
+      "decode_tps_note": "suppressed: only 3 tokens generated, need >=32 for a meaningful rate"
+    }
+  ]
+}

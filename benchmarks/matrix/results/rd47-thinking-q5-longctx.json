@@ -1,0 +1,98 @@
+{
+  "label": "rd47-thinking-q5",
+  "tier": "80B",
+  "quant": "gguf",
+  "engine": "llamacpp",
+  "workload": "longctx",
+  "model": "bench",
+  "target_prompt_tokens": 27852,
+  "actual_prompt_tokens": 25714,
+  "ttft_s_median": 9.74206881900318,
+  "ttft_s_min": 9.714405596023425,
+  "ttft_s_max": 9.832251857966185,
+  "implied_prefill_tps_median": 2646.9967457943058,
+  "decode_tps_median": 72.33978422238268,
+  "correctness_probe_pass": true,
+  "correctness_probe_detail": "punctuation. Exactly as instructed. Alright, that's straightforward. I think that's all. Let me write that.\nACKNOWLEDGED",
+  "reps": 3,
+  "vram_before": {
+    "per_gpu_bytes": [
+      29295239168,
+      31317032960
+    ],
+    "total_gb": 60.61
+  },
+  "vram_after": {
+    "per_gpu_bytes": [
+      29300137984,
+      31321780224
+    ],
+    "total_gb": 60.62
+  },
+  "notes": "",
+  "records": [
+    {
+      "ttft_s": 9.714405596023425,
+      "total_s": 13.246631543035619,
+      "stream_tokens": 256,
+      "decode_tps": 72.1924288608251,
+      "text": "Okay, let's see. The user provided a bunch of text that they said is padding and to ignore. Then they want me to count from 1 to 60, one number per line, nothing else.\n\nSo first, I need to make sure I ...[snip]...  tango charlie south zulu india echo juliet matrix struct lima zulu tensor second juliet mike lima november second tensor lower tensor first outer uniform pointer outer foxtrot victor victor yankee papa november echo zulu zulu north lima hotel upper delta inner thread kernel lower buffer zulu tensor",
+      "usage": {
+        "completion_tokens": 256,
+        "prompt_tokens": 25714,
+        "total_tokens": 25970,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 0,
+      "marker": "a6f00077d3fc4613babf30382069246f",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785635729.6677947,
+      "actual_prompt_tokens": 25714,
+      "implied_prefill_tps": 2646.9967457943058
+    },
+    {
+      "ttft_s": 9.74206881900318,
+      "total_s": 13.267099578981288,
+      "stream_tokens": 256,
+      "decode_tps": 72.33978422238268,
+      "text": "Okay, let's see. The user provided a bunch of text that they said is padding and to ignore. Then they want me to count from 1 to 60, one number per line, nothing else.\n\nSo first, I need to make sure I ...[snip]... est india lima tensor oscar south inner juliet first india mike xray oscar west upper second victor upper mike second outer oscar oscar outer charlie matrix charlie handler first victor south module echo mike lima uniform xray papa india oscar sierra alpha bravo first handler delta india module lima",
+      "usage": {
+        "completion_tokens": 256,
+        "prompt_tokens": 25852,
+        "total_tokens": 26108,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 1,
+      "marker": "d0ac6f189a84421da37dd9d05a3a645a",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785635742.9178414,
+      "actual_prompt_tokens": 25852,
+      "implied_prefill_tps": 2653.645799501261
+    },
+    {
+      "ttft_s": 9.832251857966185,
+      "total_s": 13.35659057693556,
+      "stream_tokens": 256,
+      "decode_tps": 72.3540012165496,
+      "text": "Okay, let's see. The user provided a bunch of text that they said is padding and to ignore. Then they want me to count from 1 to 60, one number per line, nothing else.\n\nSo first, I need to make sure I ...[snip]... quebec romeo foxtrot east kernel handler north kilo lima tango vector vector mike lima hotel papa papa papa hotel charlie matrix whiskey juliet zulu xray victor papa india yankee papa struct tango lima handler hotel delta kilo west east yankee alpha west buffer uniform kilo first handler upper upper",
+      "usage": {
+        "completion_tokens": 256,
+        "prompt_tokens": 25867,
+        "total_tokens": 26123,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rep": 2,
+      "marker": "d81158b01b6f4ecc92fc5694322793eb",
+      "target_prompt_tokens": 27852,
+      "wall_start": 1785635756.1882904,
+      "actual_prompt_tokens": 25867,
+      "implied_prefill_tps": 2630.8317131891113
+    }
+  ]
+}
