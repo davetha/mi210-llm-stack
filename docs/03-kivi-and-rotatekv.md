@@ -60,7 +60,7 @@ RotateKV would only be worth implementing if attention-sink protection proves ne
 | **q8_0** | 8.5 | 1.9× | ✅ | ✅ | mainline |
 | **q4_1** (V cache sweet spot) | 5.0 | 3.2× | ✅ | ✅ | mainline |
 | **q4_0** | 4.5 | 3.6× | ✅ | ✅ | mainline |
-| **KIVI2** | 3.0 | 5.3× | ✅ (scalar) | ✅ | ✅ **implemented** |
+| **KIVI2** | 3.0 | 5.3× | ❌ (no GPU kernel) | ✅ | ✅ **implemented (CPU only)** |
 | **TurboQuant turbo3** (3-bit) | ~3.0 | ~5.3× | ❌ (wave64) | ✅ (proven) | ⚠️ partial |
 | **TurboQuant turbo4** (4-bit) | ~4.0 | ~4.0× | ❌ (wave64) | ✅ (proven) | ⚠️ partial |
 | **RotateKV** | ~4.0 | ~4.0× | — | — | evaluated only |
@@ -73,4 +73,14 @@ For the CPU-pinned layers (the DDR4-bandwidth bottleneck):
 ```
 Turbo3 on CPU gives 5.3× compression (proven correct). GPU layers stay at fp16 for maximum quality. This is enabled by the **per-layer KV types** feature ([`changes/01`](../changes/01-per-layer-kv-types.md)).
 
-KIVI2 is available as an alternative (`-ctk-cpu kivi2`) — same 3.0 bpw, hardware-agnostic, and useful if you want to compress GPU layers too (TurboQuant's GPU path is broken on gfx90a; KIVI2's pure-scalar path works everywhere).
+KIVI2 is available as an alternative (`-ctk-cpu kivi2`) — same 3.0 bpw, and correct on every CPU architecture including gfx90a's host, where TurboQuant's wave64 GPU path is broken.
+
+### KIVI2 is CPU-only — it cannot compress GPU layers
+
+An earlier version of this page and of [`changes/02`](../changes/02-kivi2-quant-type.md) said KIVI2 "works on GPU too". That is wrong, and the correction matters because production runs `-ngl 999` with every layer resident on the GPU.
+
+"Pure scalar C" means *architecture-agnostic*, not *GPU-capable*. All nine files the type touches are host-side — `ggml-quants.c`, `ggml-cpu/ggml-cpu.c`, `ggml-cpu/quants.{c,h}` — and nothing under any CUDA or HIP backend defines a KIVI2 dequant kernel. A KV tensor of type `GGML_TYPE_KIVI2` therefore has no reader on the device.
+
+The usage example above already implies this: the per-layer form pairs `-ctk-cpu kivi2` with `-ctk f16` for the GPU layers, because fp16 is what the GPU layers have to be.
+
+KIVI2 was built for a specific bottleneck — CPU-pinned layers of a 230B MoE re-reading KV from DDR4 at ~7.4 s/chunk. That is a real problem and KIVI2 solves it. It is simply not the problem a fully GPU-resident deployment has. See [`docs/54`](54-kv-compression-on-vllm-and-llamacpp.md) for what does apply there.
