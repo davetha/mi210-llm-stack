@@ -1,5 +1,20 @@
 # Rounds 48–51: four nulls, and two earlier documents were wrong
 
+> **THIS DOCUMENT IS ITSELF CORRECTED BY `docs/49`.** The round 51 sections below
+> get the *mechanism* wrong. "The gfx90a port dropped the entire `fmoe_bf16_*`
+> family, so the kernels for the dtype family we need were not ported" is not
+> what happened. Disassembly shows all 8 ported gfx90a objects **do** perform
+> bf16 matrix multiply — the gfx942 bf16 kernel and the gfx90a fp16 kernel are
+> the same 3833 instructions, differing in exactly two substitutions, one of
+> which is a pure per-architecture rename of the same MFMA. The real gap is a
+> single instruction, `global_atomic_pk_add_bf16`, plus the separate fact that
+> the filename the dispatcher constructs (`fmoe_b16.co` for bf16 input,
+> `fmoe_int8_g1u0_subGU_*.co` for int8) simply is not on disk. The *conclusion*
+> — no `fmoe` ASM reachable on gfx90a — stands. The reasoning does not. See
+> `docs/49` for the instruction-level account.
+>
+> The rounds 48/49/50 sections are unaffected and remain accurate.
+
 Four rounds, no throughput win. That is the honest headline. But three of the
 four closed a question that was genuinely open, and the fourth refuted its own
 premise before costing a 3.4-hour model load — which is the cheapest way an
