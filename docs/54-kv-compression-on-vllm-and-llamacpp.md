@@ -170,6 +170,62 @@ The two outliers, `-c 196608` and `-c 262144`, are **not** covered by this measu
 
 That is the real path to long context on this box: uncompressed KV plus enough VRAM, on either stack. Not compression.
 
+## Rounds 71–72: the box serves a 1M context, uncompressed, at 27.5 tok/s
+
+Every conclusion above was drawn on vLLM, and vLLM said 1M was out of reach. The production stack was never asked. Direct VRAM measurement on llama.cpp with the production Coder-Next 80B Q4_K_M, both cards summed, of 131,040 MiB total:
+
+| context | total VRAM | free |
+|---:|---:|---:|
+| 65,536 | 49,572 MiB | 78 GB |
+| 196,608 | 53,664 MiB | 77 GB |
+| 262,144 | 55,710 MiB | 75 GB |
+| **1,048,576** | **80,267 MiB** | **50 GB** |
+
+**A 1M context allocates with 50 GB to spare** — uncompressed, f16 KV, on an 80B model. vLLM could not fit 1M on a *35B*.
+
+### Why KV is so small here, and why that undercuts the whole compression premise
+
+Weights are 46,235 MiB of the 49,572 at 64K, so KV runs about **32 KB/token** — roughly 32 GB at 1M. Qwen3-Coder-Next is a **hybrid GDN** architecture: most layers are gated-delta-net linear attention carrying a constant-size recurrent state, and only a minority carry a growing KV cache.
+
+That reframes round 70's result. Measured at 64K:
+
+| KV config | total VRAM | saved vs f16 | decode cost at 130K |
+|---|---:|---:|---:|
+| `f16`/`f16` | 49,572 MiB | — | — |
+| `q8_0`/`q8_0` (production) | 49,063 MiB | **509 MiB (1.0%)** | **−36%** |
+| `q4_1`/`q4_1` | 48,454 MiB | 1,118 MiB (2.3%) | unusable past 32K |
+
+Production is trading **1% of VRAM for 36% of decode speed.** Compressing a cache that is already a small fraction of residency cannot pay, whatever the compression ratio.
+
+This is architecture-specific and worth stating: on a dense full-attention model, KV would be a much larger share of VRAM and the memory case for quantizing would be real. The *speed* penalty measured in round 70 would still apply, but the trade would not be this lopsided.
+
+### Fitting is not serving — the depth curve to 1M
+
+| depth | tok/s | vs d=8,192 | round |
+|---:|---:|---:|---|
+| 8,192 | 76.41 | 1.000× | 70 |
+| 32,768 | 71.95 | 0.942× | 70 |
+| 65,536 | 69.16 | 0.905× | 70 |
+| 98,304 | 64.99 | 0.851× | 70 |
+| 130,000 | 62.89 | 0.823× | 70 |
+| 262,144 | 52.72 | 0.690× | 72 |
+| 524,288 | 40.55 | 0.531× | 71 |
+| **1,000,000** | **27.47** | **0.360×** | 71 |
+
+**27.47 tok/s at a million tokens of depth.** For comparison, vLLM's only 1M-capable configuration extrapolates to roughly 1 tok/s, and it is lossy. This one is exact.
+
+The decay is gradual and shows no cliff: 0.823× at 130K, 0.690× at 262K, 0.531× at 524K, 0.360× at 1M — each doubling of depth costs progressively less than a proportional share.
+
+### The 262,144 point is why this table has a round-72 row
+
+The first measurement at 262,144 returned **6.68 tok/s** — an eighth of the curve's prediction, and *slower than the 524,288 point above it*. Re-running it produced a hard **GPU memory access fault**. Run a third time from an idle GPU, the same configuration returned **52.72 tok/s**, exactly on the curve.
+
+Both bad readings began moments after tearing down a container holding tens of GB of VRAM. `docker rm -f` returns before the driver has finished reclaiming, so the next process races the teardown. GPUs were at 47 °C junction and 42 W when checked, so this was not thermal.
+
+**The non-monotonicity is what saved it.** Decode cannot get *faster* with more KV, so the curve announced its own bad sample. Had 262,144 been the deepest point measured, with nothing above it to contradict, 6.68 tok/s would have been indistinguishable from a real finding — and "llama.cpp falls off a cliff past 130K" is exactly the kind of conclusion that gets written down.
+
+Round 71's script now waits for VRAM to drop below 512 MiB before each cell, and warns rather than proceeding silently if it does not.
+
 ## KIVI does not apply here, for two separate reasons
 
 Both were worth checking because KIVI2 is *our own* implementation ([`changes/02`](../changes/02-kivi2-quant-type.md)) and the natural thing to reach for.
@@ -194,24 +250,29 @@ Active KV must be VRAM-resident. There is no `-ngl`-style dial. Given the 902,16
 
 ## Where this leaves the 1M question
 
+**The box serves a 1M context today, at 27.5 tok/s, on llama.cpp, uncompressed.** That is the answer, and none of the work that produced it involved compression.
+
 | want | on vLLM | on llama.cpp |
 |---|---|---|
-| ≤130K context, max speed | `bf16` — 902K tokens is plenty | **switch to `f16`/`f16`** — 1.08–1.57× over the `q8_0` in use today |
-| ≤130K, more concurrent streams | `bf16`; capacity is not binding | `f16` if VRAM allows, else `-ctk q8_0 -ctv f16` (untested) |
-| 196K–262K context | `bf16` covers it | `f16` VRAM unverified at these sizes — test before switching |
-| 1M context | `turboquant_4bit_nc` fits it, at ~1 tok/s | untested at this length |
+| ≤130K, max speed | `bf16` — 902K tokens is plenty | **switch to `f16`/`f16`** — 1.08–1.57× over the `q8_0` in use today |
+| 196K–262K | `bf16` covers it | `f16`, measured: 55,710 MiB at 262K, 52.72 tok/s |
+| **1M** | **cannot fit it** — bf16 caps at 902,160 tokens | **`f16`, 80,267 MiB with 50 GB spare, 27.47 tok/s** |
 
-The honest summary: **1M context on vLLM is technically reachable on this box and practically unusable.** The capacity is real and measured — 2.79M KV tokens. But turboquant's decode penalty grows with context rather than amortizing, and by 130K it is already down to 8.0 tok/s per stream. A 1M context that generates at ~1 tok/s is not a serving configuration.
+Three things this investigation got backwards before it got them right.
 
-This is worth stating flatly because the capacity number alone reads like a win. Reporting "3.09× more KV" without the slope would have been true and thoroughly misleading.
+**1. The question was framed on the wrong stack.** Rounds 64–68 established that 1M on vLLM is technically reachable and practically unusable — 2.79M KV tokens via `turboquant_4bit_nc`, decaying to 8.0 tok/s at 130K and extrapolating near 1 tok/s at 1M. All true. But vLLM was never the only option, and the stack production actually runs was not asked until round 71. It fits 1M with 38% of VRAM unused.
 
-**256K is comfortable today.** bf16 holds 902,160 tokens, needs no compression, and is the fast path. This was the answer to the original question all along, and it required no work.
+**2. Compression was assumed to be the lever.** Every arm measured refutes it — `turboquant_4bit_nc`, `turboquant_k8v4`, `int8_per_token_head`, `q8_0`/`q4_1`, `q4_0`/`q4_1`. Five configurations, two engines, two independent flash-attention implementations, and the cheapest still costs half of decode at depth. On gfx90a the dequant work exceeds the bandwidth saved, and the deficit compounds with depth.
 
-**Compression is not the route to 1M on either stack.** That was the working assumption when these rounds started, and every arm measured refutes it — turboquant, `turboquant_k8v4`, `int8_per_token_head`, `q8_0`/`q4_1`, `q4_0`/`q4_1`. Four quantizers, two engines, two independent implementations of flash attention, and the cheapest of them still costs half of decode at depth. This is not one bad kernel; it is a consistent property of quantized-KV attention on gfx90a.
+**3. The memory savings were never checked.** This is the one that should have come first. Quantizing KV on this model saves **509 MiB — 1% of VRAM** — because a hybrid GDN architecture keeps most layers on constant-size recurrent state. Every round spent measuring what compression *costs* was measuring the price of something that was never buying much. One `mem_info_vram_used` read, available from the start, would have reordered the entire investigation.
 
-**The route to 1M is uncompressed KV plus VRAM.** Round 70's `f16`/`f16` column is the evidence: 62.89 tok/s at 130,000 tokens of depth on an 80B model, decaying gracefully (0.823× across a 16× depth increase) rather than falling off a cliff. vLLM bf16 behaves the same way — its TPOT slope *falls* with depth. Uncompressed KV is not the compromise here; it is the fast path.
+The capacity number is what made this seductive: "3.09× more KV tokens" reads like a win in isolation. It took the depth curve to show the cost and the VRAM reading to show the benefit was ~1%.
 
-That reframes the arithmetic. bf16 on vLLM holds 902,160 KV tokens and a 1M context needs 1,000,000 — **10.8% short, not 3× short**. The serve script runs `--gpu-memory-utilization 0.90`. Closing an 11% gap by raising that ceiling or trimming weights is a far better bet than a 3× compression that costs 5× the decode speed, and it keeps the numerics exact. That is the experiment worth running next, and it has not been run.
+### Still open
+
+`bf16` on vLLM holds 902,160 KV tokens against the 1,000,000 a 1M context needs — **10.8% short, not 3× short** — with `--gpu-memory-utilization` at 0.90. That gap is plausibly closable, and unlike everything else here it would keep vLLM's aggregate-throughput advantage. Unmeasured.
+
+`-ctk q8_0 -ctv f16` is also unmeasured. Round 70 showed quantizing K is free and V is what costs, so it should capture most of the (small) memory saving at near-zero speed penalty. Only worth pursuing on a model where KV is a meaningful share of VRAM — which this one is not.
 
 ## Method note
 
