@@ -65,6 +65,18 @@ The TP=2 W8A8 control is in. At **equal hardware**:
 So "INT8 W8A8 is the fastest format" was an artifact of bf16 being unable to fit
 on one card, not a property of the arithmetic.
 
+> **UPDATE — the decode gap was diagnosed, and only half-fixed.** The
+> speculation immediately below (poorly-tuned Triton INT8 kernel at batch-1
+> decode) was **correct**, and [`docs/43`](43-ck-int8-gemm-gfx90a.md) replaced
+> that kernel for **1.480× decode on this 30B**. But it does **not** generalize:
+> [`docs/55`](55-vllm-vs-llamacpp-decode-on-the-80b.md) measures the same flag
+> on the 80B at **0.982×** — a slight regression — with the selected kernel
+> asserted from the server log.
+>
+> The 30B decode rows below have **not** been re-measured with the CK GEMM
+> enabled, so the "bf16 wins decode by 44%" conclusion in this section is
+> **unverified as of `docs/43`** and should not be quoted without that caveat.
+
 The decode gap is the surprising half and is worth flagging as unexplained:
 INT8 halves weight-memory traffic, so it should *win* a bandwidth-bound decode.
 Losing by 44% points at the Triton INT8 MoE kernel being poorly tuned at
