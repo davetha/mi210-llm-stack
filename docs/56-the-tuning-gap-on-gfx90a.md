@@ -135,3 +135,63 @@ Not because tuning does not work, but because only M=1–32 were tuned and **vLL
 So round 77 sweeps M = 1…2048, tunes one size per invocation (the tuner writes one file at the end, so a crash discards everything — `docs/41` lost three completed sizes to a Ray worker death), merges into an accumulator after each, and **refuses to bless a config with gaps in the prefill range**.
 
 If the large sizes exceed the 3-hour per-size cap, the honest outcome is "do not deploy this," not a partial config.
+
+### The sweep was stopped, because the arithmetic went bad
+
+Candidate counts **double per batch size**, with roughly flat per-candidate cost:
+
+| M | candidates | time |
+|---:|---:|---|
+| 1 | 304 | 14 min (measured) |
+| 2 | 608 | 31 min (measured) |
+| 4 | 1,216 | ~40 min |
+| 16 | 4,864 | ~2.7 h |
+| 32 | 9,728 | **~5.4 h — past the 3 h cap** |
+| ≥64 | 19k+ | beyond reach |
+
+So the sweep would have spent ~5 GPU-hours to arrive at a config covering M=1–16 and timing out above — exactly the shape `docs/41` measured at 0.786× prefill. Paying hours to reach a known-harmful artifact is the wrong trade, so the sweep was stopped after M=2.
+
+## Round 78: the cheap gate, and it closes the question
+
+Single-stream decode at concurrency 1 uses **M=1**, which was already tuned. TPOT is decode-only, so it isolates the tuned kernel regardless of what prefill does. That makes a ~20-minute A/B decide whether the remaining ~8 GPU-hours are worth spending.
+
+W4A16, TP=2, both arms asserting on which config actually loaded:
+
+| ctx | stock TPOT | tuned TPOT | **decode** | stock TTFT | tuned TTFT | prefill |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8,192 | 17.39 ms | 17.28 ms | **1.006×** | 1,145.6 | 1,689.3 | 0.678× |
+| 32,768 | 18.14 ms | 18.18 ms | **0.998×** | 4,995.1 | 7,216.4 | 0.692× |
+
+**Tuning the MoE kernel does not help single-stream decode on this card.** 0.6% at 8K and nothing at 32K, both inside the 1.036× decode noise floor `docs/46` established.
+
+The prefill regression is the *expected* cost of a config holding only M=1 and M=2 — every prefill shape matches M=2 by nearest-M. It reproduces `docs/41`'s failure mode deliberately and says nothing about the kernel.
+
+**This corroborates round 75.** If ~82% of vLLM's decode is latency and serialization, then a MoE tile config can only address the remaining ~18% — and it does not even reach that. Two independent measurements, same conclusion: decode on gfx90a is not limited by the things a tuner can move.
+
+The stock arm also reproduced round 76 exactly — TPOT 17.39 ms = 57.5 tok/s against round 76's 57.34 at the same depth.
+
+**Cost of the answer: ~45 minutes instead of ~8 GPU-hours.** The remaining sweep is not justified.
+
+### The assertion that nearly did not work
+
+Round 78's first run aborted the stock arm reporting the config-load warning *absent* while printing that very warning underneath it:
+
+```
+'Using default MoE config' present: no (wanted yes)
+    WARNING [fused_moe.py:1108] Using default MoE config...
+```
+
+Cause: `set -o pipefail` combined with `grep -q`. On a match, `grep -q` exits immediately, `docker logs` takes SIGPIPE, and pipefail propagates that as pipeline failure — so `... | grep -q X && flag=yes` never sets the flag *even though X is present*.
+
+The dangerous half is the other arm: the tuned arm then "passed" its assertion, because its expected value happened to be the same `no` that the broken detector always returns. **A gate that always answers `no` passes every arm that expects `no`.** Had the arms been ordered differently, the round would have produced numbers with no working verification at all — the precise false negative `docs/41` built the assertion to prevent.
+
+Fixed by counting to EOF instead of short-circuiting:
+
+```bash
+n=$( { docker logs rd78-srv 2>&1 || true; } | grep -aci "Using default MoE config" | head -1)
+[ "${n:-0}" -gt 0 ] && saw_default="yes"
+```
+
+`grep -c` reads to EOF so there is no SIGPIPE; `|| true` guards the no-match exit code; `head -1` guards the two-value output that a bare `grep -c || echo 0` produces — a defect this project has now hit twice (`docs/50`).
+
+An earlier argument-order bug in the same round (`run_arm stock "" yes` against a `tag, want_default, folder` signature) set `VLLM_TUNED_CONFIG_FOLDER=yes` and asserted against an empty string. That one the assertion *did* catch, which is the only reason it was found before it produced numbers.
