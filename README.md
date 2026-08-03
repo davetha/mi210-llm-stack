@@ -120,6 +120,7 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 ### Benchmarks
 - [`benchmarks/matrix/`](benchmarks/matrix/) — the quantization matrix: harness, sweeps, raw JSON, and [`REPRODUCE.md`](benchmarks/matrix/REPRODUCE.md) with exact tags, versions and CLI args
+- [`benchmarks/ledger.jsonl`](benchmarks/ledger.jsonl) — **check this before proposing any optimization**: one queryable record per measured lead (round, factor, verdict, doc) across all rounds. `grep '<lead>' benchmarks/ledger.jsonl` answers "has this been tried?" — the prose index below did not, and MoE stride padding was re-proposed eight months after round 44 measured it at 0.961×. Companions: [`matrix/moe-configs-manifest.json`](benchmarks/matrix/moe-configs-manifest.json) (which tuned config is which, and why **none** is deployable) and [`matrix/probe_image_patches.sh`](benchmarks/matrix/probe_image_patches.sh) (which gfx90a patches are in which image — round 73 measured a flag on an image that lacked its gate)
 - [`benchmarks/README.md`](benchmarks/README.md) — **all measured performance numbers in one place** (vLLM single/TP=2, llama.cpp, TurboQuant, KIVI, FlashAttention, KTransformers)
 
 ### Build & ops guides

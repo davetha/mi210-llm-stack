@@ -1,0 +1,100 @@
+{
+  "_comment": [
+    "Provenance for every tuned fused_moe config on the bench box, under",
+    "/mnt/llm-storage/bench-matrix/. Six directories accumulated with no record of",
+    "which was for which shape, what it measured, or whether it should ever load.",
+    "",
+    "READ deploy BEFORE USING ANY OF THESE. Two of them measured WORSE than the",
+    "untuned heuristic and one was generated under the wrong dtype scheme entirely.",
+    "",
+    "HOW vLLM PICKS A FILE: it opens exactly",
+    "  E=<num_experts>,N=<moe_intermediate_size/TP>,device_name=<dev>,dtype=<tag>.json",
+    "inside VLLM_TUNED_CONFIG_FOLDER, checked BEFORE the shipped configs. A file",
+    "whose name lacks the dtype tag is never opened -- docs/41 lost 7.5 GPU-hours",
+    "to exactly that. serve_vllm_aiter.sh leaves VLLM_TUNED_CONFIG_FOLDER empty by",
+    "default, so nothing here loads unless a round sets it.",
+    "",
+    "NEAREST-M HAS NO FALLBACK. A shape larger than the biggest tuned M matches the",
+    "nearest tuned entry, so a config covering only decode sizes will be applied to",
+    "prefill. That is how the int8 config below reached 0.786x prefill."
+  ],
+  "configs": [
+    {
+      "path": "moe-configs-mi210/E=128,N=384,device_name=AMD_Instinct_MI210,dtype=int8_w8a16.json",
+      "model": "Qwen3-30B-A3B-Thinking-2507",
+      "checkpoint": "t35-w8a8",
+      "E": 128, "N": 384, "tp": 2, "dtype": "int8_w8a16",
+      "m_sizes": [1, 2, 4, 8, 16, 32],
+      "round": 33,
+      "measured": {"prefill_cold16k": 0.786, "prefill_longctx": 0.820, "decode_longctx": 0.925},
+      "deploy": "no",
+      "reason": "Slower than untuned on every metric. Cause is the M gap, not the tuning: M=64/128 are absent and nearest-M matching sent prefill shapes to a decode config. ~5.5 GPU-hours.",
+      "doc": "docs/41"
+    },
+    {
+      "path": "moe-int4-deploy/E=512,N=256,device_name=AMD_Instinct_MI210,dtype=int4_w4a16.json",
+      "model": "Qwen3-Next-80B-A3B-Thinking",
+      "checkpoint": "t80-awq",
+      "E": 512, "N": 256, "tp": 2, "dtype": "int4_w4a16",
+      "m_sizes": [1, 2],
+      "round": 77,
+      "measured": {"decode_8k": 1.006, "decode_32k": 0.998, "prefill_8k": 0.678, "prefill_32k": 0.692},
+      "deploy": "no",
+      "reason": "Decode flat at the tuned size (round 78), inside the 1.036x noise floor. Prefill regression is the expected cost of covering only M=1,2. The sweep was stopped here: candidate counts double per M, so M>=32 exceeds a 3 h cap and the full sweep would have cost ~8 GPU-hours to reach a config with the same M-gap defect as the int8 one above.",
+      "doc": "docs/56"
+    },
+    {
+      "path": "moe-configs-int4/accumulated.json",
+      "role": "accumulator",
+      "m_sizes": [1, 2],
+      "deploy": "no",
+      "reason": "Working file for round 77's per-size merge, not a loadable config -- the filename does not match what vLLM opens. Source of truth for moe-int4-deploy/.",
+      "doc": "docs/56"
+    },
+    {
+      "path": "moe-configs-int4/per-size/m1.json, m2.json",
+      "role": "per-size backup",
+      "m_sizes": [1, 2],
+      "deploy": "no",
+      "reason": "One file per tuned size, kept because benchmark_moe.py writes the whole file at the end of a run and a crash discards everything (docs/41 lost three sizes to a Ray worker death).",
+      "doc": "docs/56"
+    },
+    {
+      "path": "moe-configs-mi210/wrong-dtype-auto-DO-NOT-USE/E=128,N=384,device_name=AMD_Instinct_MI210.json",
+      "E": 128, "N": 384, "tp": 2, "dtype": null,
+      "m_sizes": [1, 2, 4],
+      "deploy": "never",
+      "reason": "Generated with --dtype auto, which benchmarks a DIFFERENT kernel. Its schema differs too -- it carries matrix_instr_nonkdim and kpack, which the int8_w8a16 config does not have at all. Deliberately NOT renamed: a config produced under the wrong scheme is worse than none. ~7.5 GPU-hours.",
+      "doc": "docs/41"
+    },
+    {
+      "path": "moe-configs/E=128,N=768,device_name=AMD_Instinct_MI210.json",
+      "E": 128, "N": 768, "tp": 1, "dtype": null,
+      "m_sizes": [4],
+      "deploy": "never",
+      "reason": "Untagged dtype, so vLLM never opens it. N=768 means TP=1, a shape nothing here serves. Single M. Superseded by moe-configs-merged/.",
+      "doc": null
+    },
+    {
+      "path": "moe-configs-merged/E=128,N=768,device_name=AMD_Instinct_MI210.json",
+      "E": 128, "N": 768, "tp": 1, "dtype": null,
+      "m_sizes": [1, 2, 4],
+      "deploy": "never",
+      "reason": "Untagged dtype, so vLLM never opens it. TP=1 shape. Predates the filename finding in docs/41.",
+      "doc": null
+    },
+    {
+      "path": "moe-configs-w8a8/",
+      "role": "empty",
+      "deploy": "n/a",
+      "reason": "Directory exists with no JSON files.",
+      "doc": null
+    }
+  ],
+  "summary": {
+    "loadable_by_vllm": 2,
+    "measured_better_than_untuned": 0,
+    "safe_to_deploy": 0,
+    "note": "Every tuned MoE config produced on this hardware has measured neutral or worse. Nothing here should be deployed, and nothing here should be offered upstream -- contributing a 0.786x config would push a regression onto other MI210 users."
+  }
+}
