@@ -256,7 +256,18 @@ Active KV must be VRAM-resident. There is no `-ngl`-style dial. Given the 902,16
 |---|---|---|
 | ≤130K, max speed | `bf16` — 902K tokens is plenty | **switch to `f16`/`f16`** — 1.08–1.57× over the `q8_0` in use today |
 | 196K–262K | `bf16` covers it | `f16`, measured: 55,710 MiB at 262K, 52.72 tok/s |
-| **1M** | **cannot fit it** — bf16 caps at 902,160 tokens | **`f16`, 80,267 MiB with 50 GB spare, 27.47 tok/s** |
+| **1M** | **fits on the 80B at 4-bit** — 2,334,585 KV tokens (see below) | **`f16`, 80,267 MiB with 50 GB spare, 27.47 tok/s** |
+
+> **CORRECTION — "vLLM cannot fit 1M" was too general.** That claim came from
+> `bf16` on the **35B** W8A8 checkpoint, which caps at 902,160 KV tokens. It does
+> not generalize. [`docs/55`](55-vllm-vs-llamacpp-decode-on-the-80b.md) round 75
+> measures the **80B at W4A16** (`t80-awq`, 46 GB) at **2,334,585 KV tokens** —
+> 2.43× the W8A8 checkpoint's 961,015, and comfortably past 1M. The binding
+> constraint was the checkpoint's weight footprint, not vLLM.
+>
+> The rest of this document stands: compression of the KV *cache* remains
+> unaffordable on gfx90a. Shrinking the *weights* is a different lever, and it
+> is the one that buys KV headroom.
 
 Three things this investigation got backwards before it got them right.
 

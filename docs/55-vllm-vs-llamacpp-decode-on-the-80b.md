@@ -51,6 +51,44 @@ For the **80B**, this document answers it: the CK GEMM does not help, so `docs/2
 
 vLLM's remaining structural advantage is batching: its aggregate column is a real number where llama.cpp has no comparable story. That is the case for vLLM, not decode.
 
+## Round 75: W4A16 is the better vLLM checkpoint, and it bounds the decode question
+
+Two open questions after round 74: *why* is vLLM's decode slower, and does a checkpoint exist with llama.cpp's footprint but vLLM's prefill? `t80-awq` answers both — 46 GB of W4A16 (4-bit group-wise weights, null activations) against `t80-w8a8`'s 77 GB, same image, TP=2.
+
+| config | weights | prefill @16k | decode @130k | KV capacity |
+|---|---:|---:|---:|---:|
+| **W4A16** (`t80-awq`) | **46 GB** | **7,063 t/s** | **51.57 t/s** | **2,334,585 tok** |
+| W8A8 (`t80-w8a8`) | 77 GB | 7,806 t/s | 46.90 t/s | 961,015 tok |
+| llama.cpp Q4_K_M, f16 KV | 45 GB | 2,546 t/s | 62.89 t/s | — |
+
+**W4A16 vs W8A8: prefill 0.905×, decode 1.100×.** It gives up 9.5% of prefill and gains 40% of weight memory, 10% of decode, and **2.43× the KV capacity** — while still prefilling **2.77× faster than llama.cpp**.
+
+On every axis except that 9.5%, W4A16 is the better vLLM configuration for this model. It also fits a 1M context, which corrects an over-general claim in [`docs/54`](54-kv-compression-on-vllm-and-llamacpp.md).
+
+The prediction that W4A16 would lose prefill badly — dequant to bf16 at large M, no int8 MFMA benefit — was directionally right and much too strong. 9.5%, not a collapse.
+
+### The decode gap is 82% latency, and no checkpoint fixes it
+
+This round was written to test a binary: if decode improved with 4-bit weights, decode is bandwidth-bound and `docs/50`'s latency-bound roofline (measured on the 30B) does not transfer to the 80B. Decode improved, and the script printed exactly that.
+
+**The binary was too coarse, and the magnitude says the opposite.** Halving weight bytes per decode step — ~3.0 GB to ~1.5 GB at ~3B active params — bought only **1.10×**. Bandwidth-bound decode would have bought nearly 2×. Solving for the split between weight-traffic time `W` and everything else `O`:
+
+```
+(W + O) / (W/2 + O) = 1.10   ->   O = 4.5 · W
+```
+
+Weight traffic is **~18% of decode time**. The remaining 82% is latency and serialization, which **confirms** `docs/50` at 80B scale rather than refuting it.
+
+That yields a hard bound. With *free* weights, `O` alone gives `5.5/4.5 = 1.222×` over W8A8 — about **57.3 tok/s**, still short of llama.cpp's 62.89.
+
+**No vLLM checkpoint closes the decode gap by getting smaller.** The gap is kernel efficiency, not weight bytes, and W4A16 has already collected most of what weight size has to give.
+
+A pre-registered binary is still worth writing — it stops a post-hoc story. But a sign test on a quantity whose *magnitude* carries the information will mislead, and this one did. The script's printed conclusion is wrong and is superseded by this section.
+
+### Caveat
+
+`t80-awq` and `t80-w8a8` are Qwen3-Next-80B-A3B-Thinking; llama.cpp's is Qwen3-Coder-Next-80B-abliterated. Same family, both A3B, not identical models.
+
 ## Method note: round 73 measured nothing, and the bug was in the round
 
 Round 73 reported CK GEMM at 1.014× on the 80B. That was two Triton arms.
