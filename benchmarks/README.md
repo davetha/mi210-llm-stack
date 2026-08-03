@@ -23,7 +23,7 @@ Rounds 31–42; full method in `docs/40`–`docs/45`.
 | Optimization | Metric | Gain | Round / doc |
 |---|---|---:|---|
 | **AITER CK int8 GEMM** (`VLLM_ROCM_USE_AITER_LINEAR=1`) | decode | **1.480×** (1.708× at TP=1) | 40 · `docs/43` |
-| **AITER ASM flash attention** (`VLLM_PREFER_AITER_FA=1`) | prefill | **1.190×** @16k, **1.332×** @25k | 37 · `docs/28` |
+| **AITER ASM flash attention** (`VLLM_PREFER_AITER_FA=1`) | prefill | **1.190×** @16k, **1.332×** @25k | 37 · `docs/45` |
 | | TTFT | 0.850× / 0.752× | |
 | **PCIe P2P** (`NCCL_P2P_DISABLE=0`) | prefill | **1.112×** | 31 · `docs/40` |
 | **Async scheduling** (default-on in ≥0.26) | decode | **1.110×** | 38b · `docs/42` |
@@ -47,15 +47,54 @@ multiplier is claimed here.
 Recorded because a negative result costs the same GPU time as a positive one,
 and re-testing these is pure waste.
 
+> **Check [`ledger.jsonl`](ledger.jsonl) before proposing anything.** This table
+> is the human-readable summary; the ledger is the queryable one and covers all
+> rounds, including 47–78 which are not in the tables on this page. `grep
+> '<lead>' benchmarks/ledger.jsonl` answers "has this been tried?" without
+> reading 259 lines and matching semantically — which failed on 2026-08-03,
+> when MoE stride padding was re-proposed as a fresh idea eight months after
+> round 44 measured it at 0.961×.
+
 | Tried | Result |
 |---|---|
 | GPU clock pinning (1700 MHz) | 0.968× — DPM was never throttling decode |
 | CUDA-graph capture geometry (131k vs 32k) | 0.986× — no self-inflicted config tax |
 | PCIe ACS redirect removal | null, all arms within 0.4% |
-| Tuned fused-MoE config (partial) | **0.786×** — nearest-M match with no fallback |
+| Tuned fused-MoE config (partial, int8) | **0.786×** — nearest-M match with no fallback |
+| **MoE stride padding** (`VLLM_ROCM_MOE_PADDING` → int8 path) | **0.961×** — patch verifiably applied (w13 stride 2048→2304 B); upstream's 10% on Mixtral does not transfer · round 44 · `docs/45` |
 | AITER fused MoE (`_MOE=1`) | 0.977× — runs (`module_moe_asm` loads), just slower |
 | AITER rope / unified-attn / custom-AR / triton-GEMM | cannot engage; four distinct reasons, `docs/45` |
 | `enforce_eager` | **3.5× slower**, 82% of decode in gaps between kernels |
+| **CK int8 GEMM on the 80B** | **0.982×** — `docs/43`'s 1.480× does not transfer off the 30B · round 74 · `docs/55` |
+| **Tuned fused-MoE config (int4, M=1)** | **1.006×** decode — flat at the tuned size · round 78 · `docs/56` |
+| **TurboQuant / int8-per-token-head KV** | 0.511× → 0.192× as depth grows · rounds 64–68 · `docs/54` |
+| **llama.cpp `q4_1` V-cache** | 0.494× @8k, stops completing past 32k · round 70 · `docs/54` |
+
+### Where the tuned configs live
+
+Six directories of tuned `fused_moe` configs accumulated on the bench box with
+no record of which was which.
+[`matrix/moe-configs-manifest.json`](matrix/moe-configs-manifest.json) gives each
+one its shape, M coverage, measured effect and a `deploy` field.
+
+**None of them is safe to deploy** — every tuned MoE config produced on this
+hardware measured neutral or worse, and two are actively harmful.
+
+### Which patches are in which image
+
+[`matrix/probe_image_patches.sh`](matrix/probe_image_patches.sh) reports the
+gfx90a patches present in each image. Run it before any A/B that depends on one:
+
+| image | ck_gate | vLLM |
+|---|---|---|
+| `rocm-vllm-aiter-gfx90a:latest` (the `serve_vllm_aiter.sh` **default**) | **no** | 0.23.1 |
+| `vllm-mi210:v0.26.1rc0-ckgemm-warm` | yes | 0.26.1rc1 |
+| `vllm-mi210:gdnpolicy` | yes | 0.26.1rc1 |
+
+Round 73 measured the CK GEMM on the first row — an image with no selection
+gate, where the flag could not work — because it set the benchmark *client*
+image and left `VLLM_IMAGE` unset. It also explains the 6% decode difference
+between rounds 73 and 74: a different vLLM base version, not variance.
 
 ### Where the remaining time goes
 
