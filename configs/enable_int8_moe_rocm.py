@@ -1,4 +1,18 @@
-"""Let vLLM's Triton INT8 MoE run on ROCm CDNA, instead of refusing outright.
+"""
+>>> OBSOLETE (checked 2026-08-03 against vllm-project/vllm@main). <<<
+>>>
+>>> Fixed upstream. triton_moe.py:111-114 now reads:
+>>>     device_supports_int8 = (
+>>>         current_platform.is_cuda()
+>>>         and current_platform.has_device_capability((7, 5))
+>>>     ) or current_platform.is_rocm()
+>>>
+>>> This patch was required for vLLM 0.23.1 and is a no-op from ~0.26.
+>>> It was proposed as an upstream candidate on 2026-08-03 and withdrawn
+>>> the same day: the recommendation was made from THIS FILE, which
+>>> describes upstream as it stood when the file was written. Check
+>>> upstream before proposing a patch, not the patch.
+Let vLLM's Triton INT8 MoE run on ROCm CDNA, instead of refusing outright.
 
 Serving an INT8 W8A8 MoE checkpoint on an MI210 fails at startup:
 
