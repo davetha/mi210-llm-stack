@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Fix HIP graph capture: replace raw cudaMalloc/cudaFree in launch_fattn with pool allocator.
+"""
+>>> OBSOLETE (checked 2026-08-03 against ggml-org/llama.cpp@master). <<<
+>>>
+>>> Fixed upstream. ggml/src/ggml-cuda/fattn-common.cuh now contains zero
+>>> cudaMalloc/cudaFree calls and uses ggml_cuda_pool_alloc throughout.
+>>>
+>>> Proposed as an upstream candidate on 2026-08-03 and withdrawn the same
+>>> day -- judged from this file rather than from upstream.
+Fix HIP graph capture: replace raw cudaMalloc/cudaFree in launch_fattn with pool allocator.
 
 Root cause: On HIP, launch_fattn uses raw cudaMalloc/cudaFree for K_f16 and V_f16
 temp buffers (lines 1495-1496 in fattn-common.cuh). cudaMalloc is NOT permitted
