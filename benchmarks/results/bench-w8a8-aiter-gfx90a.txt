@@ -1,0 +1,87 @@
+vllm_init: found 1 ROCm devices (Total VRAM: 65520 MiB):
+  Device 0: AMD Instinct MI210, gfx90a:sramecc+:xnack- (0x90a), VMM: no, Wave Size: 64, VRAM: 65520 MiB
+| model                          |       size |     params | backend    | ngl |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --: | --------------: | -------------------: |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |          pp2048 |       1814.00 ± 6.65 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |           tg256 |         34.41 ± 1.07 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |  pp2048 @ d8192 |       1462.92 ± 2.32 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |   tg256 @ d8192 |         32.48 ± 0.06 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | pp2048 @ d16384 |       1195.07 ± 0.20 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |  tg256 @ d16384 |         31.18 ± 0.02 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | pp2048 @ d32768 |       1055.51 ± 1.62 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |  tg256 @ d32768 |         28.11 ± 0.05 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | pp2048 @ d65536 |        867.02 ± 1.11 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |  tg256 @ d65536 |         24.40 ± 0.01 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | pp2048 @ d98304 |        839.04 ± 1.66 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 |  tg256 @ d98304 |         20.68 ± 0.02 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | pp2048 @ d131072 |        726.75 ± 4.80 |
+| qwen35 27B W8A8-INT8           |  29.10 GiB |    26.90 B | ROCm/vLLM  | 999 |   1 | tg256 @ d131072 |         17.94 ± 0.01 |
+
+build: vLLM 0.26.1rc0+mi210.1 / AITER (image local/vllm-mi210:dsa7-aiterint8)
+
+
+NOTE ON COMPARABILITY -- this is NOT llama-bench output.
+The table above is formatted to match llama-bench for side-by-side reading, but
+it was produced by build/bench_llamabench_style.py driving a vLLM OpenAI server
+over HTTP. Differences that matter:
+
+  * Quant differs. Reference runs used llama.cpp Q8_0 (26.62 GiB). This is
+    compressed-tensors W8A8 INT8 (29.10 GiB): int8 weights, channel strategy,
+    int8 per-token input activations. Both are 8-bit weights, not identical.
+  * `ngl`/`fa` are not vLLM concepts. Shown as 999/1 for column parity: all
+    layers are on GPU, and flash attention is on via --attention-backend
+    ROCM_AITER_FA.
+  * pp2048 is measured as time-to-first-token for 2048 NEW tokens appended to a
+    prefix-cached depth prefix. tg256 is (n-1)/(total - ttft) over a streamed
+    256-token generation. llama-bench times these internally; these are
+    client-side and include HTTP + scheduler overhead.
+  * 3 reps per cell, mean ± stddev. Each rep uses a DIFFERENT 2048-token delta,
+    salted per process run -- with --enable-prefix-caching on, reusing a delta
+    replays it from cache and reports absurd rates (an earlier run of this same
+    sweep produced 19,048 t/s at d8192 for exactly this reason).
+  * d262144 is absent: served with --max-model-len 200000. The model's
+    max_position_embeddings is 262144, so reaching it needs
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 and a smaller KV budget.
+
+SERVE COMMAND
+
+  docker run -d --name vllm-w8a8 --init --shm-size 32g \
+    --device /dev/kfd --device /dev/dri \
+    -v /mnt/llm-storage/qwen36-27b-w8a8:/models/w8a8:ro \
+    -v /mnt/llm-storage/aiter-cache:/cache/aiter \
+    -p 8034:8000 \
+    -e HIP_VISIBLE_DEVICES=0 \
+    -e VLLM_ROCM_USE_AITER=1 -e VLLM_ROCM_USE_AITER_LINEAR=1 \
+    local/vllm-mi210:dsa7-aiterint8 \
+    vllm serve /models/w8a8 --served-model-name w8a8 \
+      --dtype bfloat16 --max-model-len 200000 --gpu-memory-utilization 0.95 \
+      --max-num-batched-tokens 16384 --attention-backend ROCM_AITER_FA \
+      --enable-prefix-caching --port 8000 --host 0.0.0.0
+
+  Model: Avesed/Qwen3.6-27B-INT8-W8A8
+  GPU KV cache size: 299,236 tokens
+
+REQUIRED PATCH -- without it these numbers are 3x lower
+
+  vLLM gates ALL AITER usage behind is_aiter_found_and_supported() in
+  vllm/_aiter_ops.py, which returns on_mi3xx() -- an MI300-series check that is
+  False on gfx90a. AiterInt8ScaledMMLinearKernel (which calls gemm_a8w8_CK) was
+  therefore never selected and W8A8 silently fell back to
+  TritonInt8ScaledMMLinearKernel. build/enable_aiter_int8_gfx90a.py widens that
+  gate to admit gfx90a while leaving on_mi3xx() itself untouched, so FP8/MXFP4
+  paths stay correctly gated off (CDNA2 has no FP8 hardware).
+
+  Confirm it took effect in the server log:
+    INFO [__init__.py:670] Selected AiterInt8ScaledMMLinearKernel for CompressedTensorsW8A8Int8
+
+  Measured effect of the patch alone, same model/card/flags:
+
+    depth   tg256 Triton   tg256 AITER   speedup
+        0          10.12         35.62      3.5x
+     8192          10.04         33.42      3.3x
+    16384           9.92         31.35      3.2x
+    32768           9.59         28.34      3.0x
+
+  The CK INT8 GEMM configs are still UNTUNED for gfx90a
+  (aiter/configs/a8w8_tuned_gemm.csv has 26 gfx942 rows, 553 gfx950, 0 gfx90a),
+  so the kernel runs a default heuristic. Tuning is not yet done.

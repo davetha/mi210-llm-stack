@@ -121,6 +121,18 @@ _REGISTER_ANCHOR = '''    @staticmethod
     def register_ops_once() -> None:
         global _OPS_REGISTERED
 '''
+# vLLM >= 0.26.1 already decorates register_ops_once with
+# @if_aiter_attention_supported. That is semantically identical to the
+# hand-rolled body guard below, so when this form is present the site needs no
+# patch. Without this case the anchor matches 0 times, the script aborts, and
+# -- because the write is atomic -- the is_linear_enabled carve-out that DID
+# match is never written to disk either. Symptom: "patched ... is_linear_enabled
+# carve-out" printed, followed by FATAL, followed by --check reporting it as
+# "not patched".
+_REGISTER_EQUIV = '''    @if_aiter_attention_supported
+    def register_ops_once() -> None:
+'''
+
 _REGISTER_PATCHED = '''    @staticmethod
     def register_ops_once() -> None:
         # gfx90a carve-out -- see configs/enable_aiter_ck_gemm_gfx90a.py.
@@ -154,10 +166,20 @@ def check(site: pathlib.Path) -> int:
     bt_s, ops_s = _read(bt), _read(ops)
     cu_done = '"gfx90a": 104' in bt_s
     lin_done = _LINEAR_PATCHED in ops_s and _LINEAR_ANCHOR not in ops_s
-    reg_done = _REGISTER_PATCHED in ops_s and _REGISTER_ANCHOR not in ops_s
+    # Satisfied either by our carve-out or by upstream's own
+    # @if_aiter_attention_supported decorator (vLLM >= 0.26.1). Both mean the
+    # ops get registered on gfx90a, which is all this site exists to ensure.
+    reg_ours = _REGISTER_PATCHED in ops_s and _REGISTER_ANCHOR not in ops_s
+    reg_upstream = _REGISTER_EQUIV in ops_s
+    reg_done = reg_ours or reg_upstream
+    reg_how = (
+        "PATCHED" if reg_ours
+        else "OK (upstream-gated)" if reg_upstream
+        else "not patched"
+    )
     print(f"  CU map (gfx90a: 104)       : {'PATCHED' if cu_done else 'not patched'}")
     print(f"  is_linear_enabled carve-out: {'PATCHED' if lin_done else 'not patched'}")
-    print(f"  register_ops_once carve-out: {'PATCHED' if reg_done else 'not patched'}")
+    print(f"  register_ops_once carve-out: {reg_how}")
     return 0 if (cu_done and lin_done and reg_done) else 1
 
 
@@ -192,12 +214,19 @@ def apply(site: pathlib.Path) -> int:
             "configs/enable_vllm_aiter_gfx90a.py FIRST -- this patch reuses "
             "the predicate that script inserts."
         )
-    for name, anchor, patched in (
-        ("is_linear_enabled", _LINEAR_ANCHOR, _LINEAR_PATCHED),
-        ("register_ops_once", _REGISTER_ANCHOR, _REGISTER_PATCHED),
+    for name, anchor, patched, equivalent in (
+        ("is_linear_enabled", _LINEAR_ANCHOR, _LINEAR_PATCHED, None),
+        ("register_ops_once", _REGISTER_ANCHOR, _REGISTER_PATCHED, _REGISTER_EQUIV),
     ):
         if patched in ops_s:
             print(f"  {name} already carved out; leaving it alone")
+            continue
+        if equivalent is not None and equivalent in ops_s:
+            # Upstream (>=0.26.1) decorates this with @if_aiter_attention_supported
+            # directly, which is exactly what our carve-out achieves by hand.
+            # Nothing to do -- and crucially, not a reason to abort the whole
+            # patch and leave is_linear_enabled unwritten.
+            print(f"  {name} already gated by if_aiter_attention_supported upstream")
             continue
         n = ops_s.count(anchor)
         if n != 1:
