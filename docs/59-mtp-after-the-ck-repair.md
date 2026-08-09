@@ -114,17 +114,38 @@ truncated-vocabulary draft head is the one lever that would move `b` materially.
 
 Prefill loses **23–25%**, and the loss is **flat across N**. Speculation does no
 drafting during prefill, so this is not draft cost — it is a fixed structural
-consequence of turning the feature on. The likely mechanism, unverified: this
-model is **48 of 64 layers `linear_attention`** (GatedDeltaNet), and
-`vllm/v1/attention/backends/gdn_attn.py:112` calls
-`_init_reorder_batch_threshold(1, self.use_spec_decode)` — enabling speculation
-changes the batch reordering threshold for every GDN layer, whether or not a
-draft is in flight.
+consequence of turning the feature on.
 
-That is worth chasing on its own account, independent of speculation: a 23%
-prefill regression from a decode-side feature flag is a defect, not a tradeoff.
-It is **not** chased here because the `b > 1` result already closes the
-speculation line and the prefill path does not depend on it.
+A startup-only A/B (`mtp_structural.sh`, both arms, logs diffed) rules out the
+obvious explanations:
+
+| | baseline | N=1 |
+|---|---|---|
+| GPU KV cache | 299,236 tokens | 281,853 (−5.8%) |
+| attention block size | 784 tokens | 800 |
+| cudagraph mode | `FULL_AND_PIECEWISE` | `FULL_AND_PIECEWISE` |
+| **mixed prefill-decode PIECEWISE graphs** | **48** | **48** |
+| decode FULL graphs | 36 | 52 (the spec shapes) |
+| GDN prefill kernel | Triton/FLA, `head_k_dim=128` | Triton/FLA, `head_k_dim=128` |
+
+So it is **not** lost KV capacity (5.8% cannot produce 23%), **not** a dropped
+or degraded prefill graph path (identical mode, identical count), and **not** a
+different GDN prefill kernel. The prefill path looks structurally identical and
+runs 23% slower.
+
+What remains, untested: scheduling. This model is **48 of 64 layers
+`linear_attention`** (GatedDeltaNet), and
+`vllm/v1/attention/backends/gdn_attn.py:112` calls
+`_init_reorder_batch_threshold(1, self.use_spec_decode)`, so enabling
+speculation changes batch reordering for every GDN layer whether or not a draft
+is in flight; the scheduler also reserves per-step slots for draft tokens, which
+would shrink the effective prefill chunk below `--max-num-batched-tokens 16384`.
+Either would fit "flat across N and invisible in the startup log."
+
+This is left open deliberately. A 23% prefill regression caused by a decode-side
+feature flag is a defect rather than a tradeoff, and it is worth chasing on its
+own account — but it does not gate anything here, because the `b > 1` result
+already closes the speculation line without it.
 
 ## Verdict
 
