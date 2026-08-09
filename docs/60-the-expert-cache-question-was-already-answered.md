@@ -71,20 +71,53 @@ near-uniform routing.
 `guides/moe-expert-cache-vllm.md` was written against vLLM 0.25 and has since
 gone wrong in two ways that matter, because it reads as ground truth:
 
-- It documents `--moe-expert-cache-size N` as a **shipped "vLLM 0.25+"
-  feature**. It is not. Current vLLM `main` exposes only UVA and a group/layer
-  `PrefetchOffloader` in `vllm/config/offload.py`; the expert cache is still
-  **open PR [vllm-project/vllm#37190](https://github.com/vllm-project/vllm/pull/37190)**
-  (opened 2026-03-16, last touched 2026-08-05, unmerged). That PR is also
-  BF16/limited-FP8, `--enforce-eager`, no EP>1, and synchronous per-miss H2D —
-  unusable as-is for a Q4_K GGUF path and hostile to graph-mode decode.
-- It repeats `VLLM_USE_AITER=0` with the rationale *"AITER rejects gfx90a — only
-  targets gfx942/gfx950."* This repo has spent twenty documents disproving that:
-  `docs/19`, `docs/18`, `docs/35`, `docs/43`, `docs/57`. Following the guide
-  today turns off the CK int8 GEMM that `docs/57` measures at **2.9–3.5×
-  decode**.
+### 3a. `--moe-expert-cache-size` is not in any image here
 
-Both are fixed in this change, with the guide re-headed as historical.
+The guide documents it as a shipped "vLLM 0.25+" feature. It is not: current
+vLLM `main` exposes only UVA and a group/layer `PrefetchOffloader` in
+`vllm/config/offload.py`, and the cache is
+**PR [vllm-project/vllm#37190](https://github.com/vllm-project/vllm/pull/37190)**,
+opened 2026-03-16 and unmerged as of 2026-08-05. The guide's recipe cannot be
+run as written — the flag is an unrecognised argument.
+
+**"Unmerged" is not the objection.** This stack carries five unmerged vLLM
+branches in `mi210-vllm/patches/registry.yaml` on purpose, and `aiter-cdna2`
+binary-repatches shipped code objects, which is considerably further from
+upstream than cherry-picking a PR. If #37190 were worth having, the move would
+be to add it to the registry with an `obsolete_when` predicate like the others.
+
+The objections are that it would not work, and would not pay if it did:
+
+- **Mechanically:** BF16 with limited FP8, requires `--enforce-eager`, no EP>1,
+  synchronous per-miss H2D. It cannot serve the Q4_K GGUF path at all, and
+  `--enforce-eager` alone surrenders the graph-mode decode `docs/42` measured at
+  99.9% kernel coverage — where the eager control was **3.5× slower wall**.
+  That is a large, certain loss against a speculative gain.
+- **Empirically:** §1. Entropy 0.91.
+
+### 3b. The `VLLM_USE_AITER=0` advice is stale, and the reason matters
+
+The guide says to disable AITER because *"AITER rejects gfx90a — only targets
+gfx942/gfx950."* Stated precisely: **that is true of stock AITER, false as a
+claim about the hardware, and no longer true of this stack.** Upstream AITER
+does ship ASM code objects for gfx942/gfx950/gfx1250 only and does check the
+architecture by name in every dispatch path — `aiter-cdna2`'s own README puts it
+plainly: on an unpatched MI210, `VLLM_ROCM_USE_AITER=1` "has no effect
+whatsoever."
+
+What makes it false *here* is `aiter-cdna2` repatching 242 of 1,422 code objects
+and opening the `on_mi3xx()` gates (`docs/18`, `docs/19`, `docs/35`), plus
+`enable_vllm_aiter_gfx90a.py` and `enable_aiter_ck_gemm_gfx90a.py`. On a patched
+image, following the guide costs the **2.9–3.5× decode** of `docs/57`. On a
+stock image the flag is simply inert. The distinction matters because this guide
+is public and most readers do not have the patched image.
+
+The rewritten note is conditional on which image you are running, and carries a
+warning the original could not have had: **`ROCM_AITER_FA` silently corrupts
+sliding-window attention on gfx90a** — no crash, no log line, healthy server,
+garbage output, verified on `poolside/Laguna-S-2.1-INT4` — so "AITER on" is not
+unconditionally right even on the patched image
+([`aiter-cdna2` #2](https://github.com/davetha/aiter-cdna2/blob/main/docs/aiter-fa-sliding-window-corruption.md)).
 
 ## 4. What the proposal got backwards
 
