@@ -12,6 +12,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **Launch-flag matrix campaign (2026-08-16 → 08-20)**: both production models on both stacks, 227 gate-v2 cells. Dense qwen38 ladder: **18.3 → 42.3 (+AITER) → 80.0 (+MTP n2, robust) → 108.5 (n5, bimodal)** tok/s decode on the same w8a8 checkpoint; MoE w8a8+MTP n3+AITER = **139.8**. The MTP×quant cells were blocked by a one-line M-RoPE flatten bug (fixed, upstream #52973). Numerics: vLLM DIVERGE base rate measured **zero**; TP and the compile/JIT cache policy are each independent numerics parameters. Suffix decoding on this stack is a **reproduced correctness blocker** (premature stop at temp 0, 2/2). See [docs/58](docs/58-launch-flag-matrix-campaign-2026-08.md) and [docs/59](docs/59-mtp-unblocked-rope-fix-depth-ladders.md).
 
+> **Serving reference (2026-08-20)**: qwen38 production = W8A8 + AITER + MTP n2 at 256K on the mtpfix image — **~4× decode vs the old config (18 → 72 t/s solo)**; canonical launcher at `big:/home/dave/launch-qwen38.sh`. The perceived "slowness" that prompted a day of investigation was 49K-token-prompt TTFT (prefill physics, 81% prefix-cached) plus a probe bug: **SSE chunk-rate undercounts ~2.7× under spec decode — use `completion_tokens/wall`**. See [docs/60](docs/60-serving-qwen38-fast-and-what-slow-feels-like.md).
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---
