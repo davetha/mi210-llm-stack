@@ -10,6 +10,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **ASM paged-attention decode fixed (2026-07-27)**: `pa_fwd_asm` **does** run on gfx90a — 48/48 configs numerically exact vs a PyTorch reference. The earlier "gfx942 binaries can't run on gfx90a" conclusion was wrong: the real blocker was a **stale JIT module** whose kernarg layout predated the installed `.co` files, so the kernel ran at full speed and silently discarded every store. Also audits all 1,251 patched `.co` files. See [`docs/18-pa-fwd-asm-resolved.md`](docs/18-pa-fwd-asm-resolved.md).
 
+> **Launch-flag matrix campaign (2026-08-16 → 08-20)**: both production models on both stacks, 227 gate-v2 cells. Dense qwen38 ladder: **18.3 → 42.3 (+AITER) → 80.0 (+MTP n2, robust) → 108.5 (n5, bimodal)** tok/s decode on the same w8a8 checkpoint; MoE w8a8+MTP n3+AITER = **139.8**. The MTP×quant cells were blocked by a one-line M-RoPE flatten bug (fixed, upstream #52973). Numerics: vLLM DIVERGE base rate measured **zero**; TP and the compile/JIT cache policy are each independent numerics parameters. Suffix decoding on this stack is a **reproduced correctness blocker** (premature stop at temp 0, 2/2). See [docs/58](docs/58-launch-flag-matrix-campaign-2026-08.md) and [docs/59](docs/59-mtp-unblocked-rope-fix-depth-ladders.md).
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---
