@@ -1,5 +1,13 @@
 # Serving qwen38 fast — and what "slow" actually feels like
 
+> ⚠️ **Superseded (2026-08-21)** for the serving config and numbers: production
+> now runs **DFlash2 + forced full cudagraphs at 168 tok/s** (2.2× the MTP config
+> below), and the "max-model-len is the lever" claim here is **withdrawn** — the
+> real cost was vLLM silently downgrading cudagraphs. See
+> [`docs/61`](61-dflash2-and-the-silent-cudagraph-downgrade.md). The TTFT
+> analysis and the measurement trap in this page still stand.
+
+
 2026-08-20. After the depth-ladder campaign ([59](59-mtp-unblocked-rope-fix-depth-ladders.md)),
 production qwen38 was redeployed with the tuned config and then investigated
 for a day over a user-perceived slowdown. This page is the launch reference

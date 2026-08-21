@@ -14,6 +14,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **Serving reference (2026-08-20)**: qwen38 production = W8A8 + AITER + MTP n2 at 256K on the mtpfix image — **~4× decode vs the old config (18 → 72 t/s solo)**; canonical launcher at `big:/home/dave/launch-qwen38.sh`. The perceived "slowness" that prompted a day of investigation was 49K-token-prompt TTFT (prefill physics, 81% prefix-cached) plus a probe bug: **SSE chunk-rate undercounts ~2.7× under spec decode — use `completion_tokens/wall`**. See [docs/60](docs/60-serving-qwen38-fast-and-what-slow-feels-like.md).
 
+> **DFlash2 + the cudagraph downgrade (2026-08-21)**: ported vLLM PR #52816 (block-diffusion drafting) to gfx90a — **168 tok/s decode on Qwen3.8-27B, 2.2× the previous production config**, lossless, 98.6% draft acceptance. The bigger finding: vLLM **silently downgrades `cudagraph_mode` to PIECEWISE under speculative decoding**, costing **60% of decode** — force `FULL_DECODE_ONLY` and verify the `Capturing CUDA graphs (FULL)` log line. Includes a retraction of an earlier `--max-model-len` attribution. See [docs/61](docs/61-dflash2-and-the-silent-cudagraph-downgrade.md).
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---
