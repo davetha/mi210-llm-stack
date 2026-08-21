@@ -1,26 +1,85 @@
 # vLLM MoE Expert Cache on gfx90a
 
-How to set up vLLM with `--moe-expert-cache-size` on the MI210 — the best
-alternative to llama.cpp for MoE inference when you need high concurrency.
+> ⚠️ **Two things in this guide were wrong; corrected 2026-08-09. Read
+> [`docs/60`](../docs/60-the-expert-cache-question-was-already-answered.md)
+> first.** `--moe-expert-cache-size` is **not a shipped vLLM feature** — it is
+> still open PR
+> [vllm-project/vllm#37190](https://github.com/vllm-project/vllm/pull/37190).
+> And the `VLLM_USE_AITER=0` advice below is actively harmful on this card
+> today. The MoE-config section is still good.
+>
+> Separately, the expert-cache *idea* has been measured and lost:
+> `mi210-vllm/docs/ROUTING.md` traced the router on GLM-5.2 and found
+> near-uniform routing (per-layer entropy ~0.91, top-10% of experts covering 42%
+> of accesses), so no VRAM cache concentrates the working set.
 
-## What the expert cache does
+## What the expert cache does — and does not
 
-`--moe-expert-cache-size N` (vLLM 0.25+) implements an **LRU expert weight cache**
-in VRAM: experts are loaded on demand when first routed to, and evicted
-(least-recently-used) when the cache is full. This is vLLM's equivalent of
-llama.cpp's `-ot ...=CPU` selective offload, but automatic.
+`--moe-expert-cache-size N` would implement an **LRU expert weight cache** in
+VRAM: experts loaded on demand when first routed to, evicted least-recently-used
+when full — vLLM's equivalent of llama.cpp's `-ot ...=CPU` selective offload,
+but automatic.
+
+**The flag is not in any image you have.** Current vLLM `main` exposes only UVA
+and a group/layer `PrefetchOffloader` in `vllm/config/offload.py`; the cache is
+PR #37190, opened 2026-03-16 and unmerged as of 2026-08-05. Passing
+`--moe-expert-cache-size` to the stack as built is an unrecognised-argument
+error, so the recipe below cannot be followed as written.
+
+"Unmerged" is not by itself an objection here — `patches/registry.yaml` in
+`mi210-vllm` carries five unmerged vLLM branches on purpose, and `aiter-cdna2`
+goes considerably further than cherry-picking a PR. If #37190 were worth having,
+the correct move would be to add it to the registry with an `obsolete_when`
+predicate, exactly like the others.
+
+It is not worth having, for two independent reasons. **Mechanically**, #37190 is
+BF16 with limited FP8, requires `--enforce-eager`, does not support EP>1, and
+copies synchronously on every miss — it cannot serve a Q4_K GGUF path at all,
+and `--enforce-eager` alone costs the 99.9%-coverage graph-mode decode that
+`docs/42` measured (eager was 3.5× slower wall). **Empirically**, the routing
+trace says a cache would not pay even if it were free — see `docs/60`.
 
 ## Environment flags for gfx90a
 
 ```bash
-export VLLM_USE_AITER=0          # disable AITER (gfx90a not in its target list)
 export VLLM_USE_TRITON_FLASH_ATTN=1   # use Triton FA, not the broken rocWMMA path
 ```
 
 | Flag | Why |
 |------|-----|
-| `VLLM_USE_AITER=0` | AITER (AMD Instinct Triton Extensions for ROCm) rejects gfx90a — only targets gfx942/gfx950. |
 | `VLLM_USE_TRITON_FLASH_ATTN=1` | Forces the Triton attention backend (wave64-safe) instead of the rocWMMA path (CDNA3+ only). |
+
+> ⚠️ This guide used to say `VLLM_USE_AITER=0`, on the grounds that "AITER
+> rejects gfx90a — only targets gfx942/gfx950." **That is true of stock AITER,
+> false as a claim about the hardware, and out of date on this stack.**
+>
+> Stock AITER ships ASM code objects for gfx942/gfx950/gfx1250 only and checks
+> the architecture by name in every dispatch path, so on an *unpatched* MI210
+> `VLLM_ROCM_USE_AITER=1` has no effect at all and the engine silently serves a
+> generic fallback. The old advice was reacting to something real.
+>
+> What changed is not upstream — it is us.
+> [`aiter-cdna2`](https://github.com/davetha/aiter-cdna2) binary-repatches
+> **242 of 1,422** gfx942 code objects to gfx90a and opens the gating
+> predicates (`on_mi3xx()`, enumerated in `docs/35`). With that applied, ASM
+> flash attention is 80/80 configs numerically exact (`docs/19`), ASM
+> paged-attention decode 48/48 exact (`docs/18`), and the CK int8 GEMM is worth
+> **2.9–3.5× decode** on W8A8 (`docs/57`).
+>
+> So the advice is conditional, not "always on":
+>
+> - **Patched image** (`aiter-cdna2` + `enable_vllm_aiter_gfx90a.py` +
+>   `enable_aiter_ck_gemm_gfx90a.py` — what `mi210-vllm` builds): serve W8A8
+>   with `VLLM_ROCM_USE_AITER=1` **and** `VLLM_ROCM_USE_AITER_LINEAR=1`, then
+>   grep the log for `Selected .*ScaledMMLinearKernel` before trusting a number.
+> - **Stock ROCm/vLLM image**: the flag genuinely does nothing. Not harmful, not
+>   a fix.
+> - **⚠️ Never for sliding-window models, on any image.** `ROCM_AITER_FA`
+>   **silently corrupts sliding-window attention on gfx90a** — no crash, no
+>   assert, no log line, healthy server, normal throughput, garbage output.
+>   Verified on `poolside/Laguna-S-2.1-INT4` (36 `sliding_attention` / 12
+>   `full_attention`); `TRITON_ATTN` fixes it. See
+>   [`aiter-cdna2/docs/aiter-fa-sliding-window-corruption.md`](https://github.com/davetha/aiter-cdna2/blob/main/docs/aiter-fa-sliding-window-corruption.md).
 
 ## Single-GPU testing first
 
