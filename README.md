@@ -16,6 +16,8 @@ A complete optimization journal for running **large Mixture-of-Experts LLMs** (u
 
 > **DFlash2 + the cudagraph downgrade (2026-08-21)**: ported vLLM PR #52816 (block-diffusion drafting) to gfx90a — **168 tok/s decode on Qwen3.8-27B, 2.2× the previous production config**, lossless, 98.6% draft acceptance. The bigger finding: vLLM **silently downgrades `cudagraph_mode` to PIECEWISE under speculative decoding**, costing **60% of decode** — force `FULL_DECODE_ONLY` and verify the `Capturing CUDA graphs (FULL)` log line. Includes a retraction of an earlier `--max-model-len` attribution. See [docs/61](docs/61-dflash2-and-the-silent-cudagraph-downgrade.md).
 
+> **Attention partitioning (2026-08-22)**: long-context decode in production **168 / 30.6 / 13.6 → 178.8 / 92.0 / 49.0 tok/s at 2K / 41K / 101K** (3.0× at 41K, 3.6× at 101K). Also fixes the ROCm free paged-attention kernel, which was numerically wrong for every `block_size > 64` on gfx90a — two KV slot offsets taken from the partition-local token index instead of the global one. The measurement lesson is the bigger one: the first patch, worth **5.2× at 41K and 11.6× at 100K with spec decode off**, measured as *exactly zero* in production, because with speculative decoding on every step has `query_len > 1` and routes to `context_attention_fwd` — the paged-decode kernels are never reached. See [docs/62](docs/62-attention-partitioning-and-the-kernel-nobody-was-running.md).
+
 > **Hardware:** 2× AMD MI210 (gfx90a / CDNA2, 64 GB HBM2e each) · AMD EPYC 74F3 (24c / 48t) · 499 GB DDR4 · ROCm 7.14 · Ubuntu 26.04. Everything runs in Docker.
 
 ---

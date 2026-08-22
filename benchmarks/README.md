@@ -28,7 +28,17 @@ Rounds 31–42; full method in `docs/40`–`docs/45`.
 | **PCIe P2P** (`NCCL_P2P_DISABLE=0`) | prefill | **1.112×** | 31 · `docs/40` |
 | **Async scheduling** (default-on in ≥0.26) | decode | **1.110×** | 38b · `docs/42` |
 | **256k paged attention** (patched gfx9 gate) | decode @205k | **13.08×** | — · `docs/36` |
+| **Spec-verify context partitioning** | decode @41k | **3.00×** | — · `docs/62` |
+| | decode @101k | **3.60×** | |
+| **Paged-decode seq partitioning** (spec decode OFF only) | decode @100k | **11.6×** | — · `docs/62` |
 | ~~vLLM 0.23.1 → 0.26.1rc0~~ | decode | ~~1.035×~~ **inside noise** | 36 · `docs/46` |
+
+> **The two `docs/62` rows are not additive, and the second one is conditional.**
+> With speculative decoding on, `query_len > 1` routes every decode step to
+> `context_attention_fwd` and the paged-decode kernels are never reached — that
+> patch measures as *exactly zero* in production and its 11.6× is only realisable
+> with spec decode off. The 3.0×/3.6× rows are the ones production sees. Full
+> numbers in [`attention-partitioning-gfx90a.md`](attention-partitioning-gfx90a.md).
 
 **The decode noise floor is 1.036×** (5 identical runs, `docs/46`). Any
 decode row above must clear it; the version-climb row does not, and is struck
