@@ -41,6 +41,25 @@ int kv_head_stride  = key_cache.stride(1);
 The earlier claim that it "takes no stride arguments" came from reading the
 Python wrapper in `_custom_ops.py`, which simply does not expose them.
 
+> **What is upstream and what is not** (checked 2026-08-22 against
+> `vllm-project/vllm@main`, added after this page first went up because the
+> original wording invited the wrong assumption):
+> `has_native_kv_cache_layout` **is** upstream, and is called from both
+> `chunked_prefill_paged_decode.py` and `rocm_attn.py`. But
+> `_update_hybrid_attention_mamba_layout` — the function that actually produces
+> the 2× interleave — is **fork-local**; upstream contains no `as_strided_` on a
+> KV cache anywhere. So upstream carries the *gate* while nothing upstream
+> creates the layout it guards against, and the interleave described here is a
+> property of this fork, not of vLLM generally.
+>
+> Likewise the free kernel of §2 does not exist upstream at all, and upstream's
+> `use_rocm_custom_paged_attention` admits only `block_size == 16 or 32`, so
+> there is no upstream instance of that bug to fix. §2 is a fork-only repair.
+>
+> None of this touches §3–§4: the partitioning patches do not depend on the KV
+> layout, and the collapsing grids they fix are verbatim upstream — with
+> `prefix_prefill.py` byte-identical between this fork and upstream/main.
+
 So the layout gate was relaxed behind an env flag and the result measured. **The
 patch was inert** — all eight gate probes returned outputs byte-identical to
 baseline, because a different check fires first:
