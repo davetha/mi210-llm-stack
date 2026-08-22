@@ -83,3 +83,55 @@ gmu 0.72; `--max-model-len 262144`; `--max-num-batched-tokens 8192`;
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. Launcher:
 `big:/home/dave/launch-qwen38.sh`. Untried: `VLLM_USE_V2_MODEL_RUNNER=1`, the
 path the vLLM warning itself names, may allow graphs on prefill too.
+
+## 4. The headline is best-case text — and the real ceiling is elsewhere
+
+The 168 tok/s above was measured generating a **numbered list**, the most
+drafter-friendly text there is. Same server, same 41K context, only the
+requested text changed:
+
+| generation at 41K | DFlash2 n=8 | no speculation |
+|---|---:|---:|
+| predictable (numbered list) | 30.6 | 6.2 |
+| unpredictable (prose) | 6.9 | 6.2 |
+
+DFlash2 is worth **4.9× on predictable text and +11% on prose**. It never loses
+(lossless, wasted drafts are cheap), so it stays on — but no single number
+describes this box without stating the text profile. Real agent traffic showed
+17–25% draft acceptance versus 98.6% on the list probe.
+
+**The actual ceiling is base decode at long context**: 33.9 tok/s at 2K falls to
+6.2 at 41K with no speculation at all. Bandwidth cannot explain it — KV at 41K
+is ~2.8 GB (~2 ms) against ~160 ms per step. The logs give the cause:
+
+```
+Setting attention block size to 784 tokens to ensure that attention page size
+  is >= mamba page size
+Cannot use ROCm custom paged attention kernel, falling back to Triton
+```
+
+Qwen3.8-27B is **hybrid** (GDN/mamba + full attention). vLLM pads the attention
+page size to match mamba's, and stride-padded hybrid layouts are deliberately
+routed to the Triton decode path (`chunked_prefill_paged_decode.py`,
+`has_native_kv_cache_layout` → `use_custom = False`). It is **not** a head_dim
+gate and **not** switchable: `VLLM_ATTENTION_BACKEND=ROCM_AITER_FA` is ignored
+("Overriding with ROCM_ATTN") and measures identical to the digit.
+
+This is now the biggest optimization target on this hardware — worth an
+estimated 3–5× at agent-sized contexts, and it needs code: teach the ROCm
+custom paged-attention kernel the stride-padded hybrid layout, or align the
+hybrid page sizes so no padding is needed.
+
+## 5. What the client sends dominates all of it
+
+| opencode configuration | prompt tokens | decode |
+|---|---:|---:|
+| as configured (12 MCP servers) | 69,516 | 5.2–6.4 |
+| 5 heavy MCP servers disabled | 50,774 | 7.1 |
+| `--pure` (no plugins/MCP) | 17,478 | 18.1 |
+
+A one-line question costs **69.5K prompt tokens**, ~75% of it MCP tool schemas.
+Prefix caching hides the prefill on repeat turns (TTFT 64.6 s → 2.4 s), but the
+KV is re-read every decode step, so the tool payload sets the decode rate for
+the entire session. MCP hygiene is worth ~3× — more than any server flag
+currently available.
