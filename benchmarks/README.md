@@ -33,6 +33,13 @@ Rounds 31–42; full method in `docs/40`–`docs/45`.
 | **Paged-decode seq partitioning** (spec decode OFF only) | decode @100k | **11.6×** | — · `docs/62` |
 | ~~vLLM 0.23.1 → 0.26.1rc0~~ | decode | ~~1.035×~~ **inside noise** | 36 · `docs/46` |
 
+> **DFlash2's value collapsed once attention was fixed.** It was a flat ~5×
+> regardless of context; it is now 3.73× / 2.14× / 1.33× at 2K / 41K / 101K on
+> real code, and a *net loss* on unpredictable prose beyond 40K. n=8 remains
+> optimal at every measured cell — no shallower depth wins anywhere, because
+> DFlash2's block-diffusion drafter pass costs the same regardless of `n`.
+> Full matrix in [`spec-depth-vs-context-gfx90a.md`](spec-depth-vs-context-gfx90a.md).
+
 > **The two `docs/62` rows are not additive, and the second one is conditional.**
 > With speculative decoding on, `query_len > 1` routes every decode step to
 > `context_attention_fwd` and the paged-decode kernels are never reached — that
