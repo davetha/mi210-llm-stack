@@ -122,6 +122,24 @@ estimated 3–5× at agent-sized contexts, and it needs code: teach the ROCm
 custom paged-attention kernel the stride-padded hybrid layout, or align the
 hybrid page sizes so no padding is needed.
 
+> **Correction (2026-08-22).** The size estimate held — production went 3.0× at
+> 41K and 3.6× at 101K — but the diagnosis above is wrong in two ways, and
+> acting on it as written wastes the effort.
+>
+> The layout gate is **not** what forces Triton. Relaxing it is measurably
+> inert: `block_size 784 > 64` trips a separate veto in
+> `use_rocm_custom_paged_attention` first, because the free kernel was
+> *numerically wrong* above block_size 64 on gfx90a. Nor is the "stride padding"
+> padding — it is an exact 2× K/V interleave, and the HIP kernel does take
+> `kv_block_stride`/`kv_head_stride`, contrary to what the Python wrapper's
+> signature suggests.
+>
+> More importantly, **this whole paragraph is about a kernel a spec-decode
+> deployment never reaches.** With DFlash2 running, `query_len = 9 > 1` routes
+> every decode step to `context_attention_fwd` instead. The fix that actually
+> moved production was partitioning *that* kernel's cached-context scan.
+> See [docs/62](62-attention-partitioning-and-the-kernel-nobody-was-running.md).
+
 ## 5. What the client sends dominates all of it
 
 | opencode configuration | prompt tokens | decode |
