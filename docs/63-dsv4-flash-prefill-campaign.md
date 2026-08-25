@@ -118,7 +118,7 @@ Measured from every direction, all agreeing:
 | multi-GPU scheduling | 95%+ busy, 0.6% dual-idle | dispatch-trace interval analysis |
 | launch flags | tuned, re-verified after every shipped patch | `-ub` swept twice |
 
-**Whole-model (bit-identical to the reference) 16K = 589 · 60K = 538.5 · 100K ≈ 491 is the ceiling of this stack on this hardware.** The residual ~5% GPU idle has no accessible lever.
+**Whole-model 16K = 601 · 60K = 545 · 100K ≈ 491.** (An earlier revision of this document called 589/538.5 the ceiling — see the correction below; it was not.)
 
 ### Held: `top_k` 384 (a quality trade, not deployed)
 
@@ -158,3 +158,50 @@ Measurement discipline that made these numbers trustworthy:
 - **Co-tenant-idle windows.** A second model shares these GPUs; benchmarking against it both slows *and* contaminates results. Every A/B verified the co-tenant was quiet, and re-measured the baseline in the same window rather than trusting a stored number.
 - **Correctness gate on every change**, including "performance-only" ones — `test-backend-ops` for op-level identity, needle-in-haystack at multiple depths for end-to-end coherence. Experiment 2 is why.
 - **ROCm VRAM-release lag** — `docker rm -f` returns before VRAM frees; every relaunch waits for VRAM to actually drop before starting, or the next server boots into a starved GPU and reports garbage.
+
+
+---
+
+## ⚠️ Correction: 589/538.5 was not the ceiling — a fork-local patch was costing 2%
+
+After declaring the campaign closed, an isolated benchmark of the fork's own inherited
+patches found that **`MI210_MOE_J` — the MoE J-tile-selection heuristic — is a net loss.**
+
+It sizes `ncols_sel` against the expected per-expert load in `mul_mat_q_switch_J`, on the
+reasoning that dead tiles are expensive because *"CDNA takes the stream-k branch, so those
+dead tiles still occupy the persistent-block decomposition."* But the CDNA MMQ config in
+this tree runs **`stream_k = false`**, where out-of-range tiles early-return cheaply. The
+premise does not hold on this hardware, so shrinking J only adds tiles.
+
+Measured twice, independently:
+
+| | pp8192 / 16K | pp16384 / 60K |
+|---|---|---|
+| pristine `upstream/master`, with the heuristic | 380.59 ± 0.27 | 329.08 ± 0.10 |
+| pristine `upstream/master`, without | **386.09 ± 0.50** | **332.18 ± 0.43** |
+| production config, with (was shipping) | 589.3 | 538.6 |
+| production config, without | **600.9** | **545.8** |
+
+**+1.9% at 16K, +1.4% at 60K**, TTFT@60K 111.4 → 109.9 s, needle 3/3, decode unchanged.
+Numerically neutral: J is a tile-*selection* parameter; accumulation order along K is
+unchanged. Deployed and verified live at **16K = 601.1, 60K = 545.4**.
+
+This crosses **600 tok/s at 16K on the whole model**, which the campaign had concluded was
+only reachable via the quality-traded `top_k=384` setting. It was not.
+
+The lesson generalises past this patch: **inherited fork patches deserve the same isolated
+A/B as new ones.** This one had been carried for months on a rationale that silently stopped
+matching the config it ran on. The campaign spent a dozen experiments looking for new wins
+while a regression sat in the build.
+
+### Tier-2 upstream candidates, both killed by measurement
+
+- **GPU multi-pass top-k** — wash (386.04 vs 386.09; 332.33 vs 332.18). An earlier revision
+  of this document claimed it "removes a CPU fallback above ncols 1024". **That was wrong**:
+  upstream's non-CUB path already uses a GPU bitonic argsort. Top-k is ~1.3% of kernel time,
+  so any gain is structurally below noise.
+- **MMQ J-selection** — regression, as above.
+
+The upstream list is therefore just the **MFMA head-size cap lift** (+15.9%/+16.1% on
+pristine upstream, ready) and the **state-restore pin** (crash workaround for the open
+issue #20176).

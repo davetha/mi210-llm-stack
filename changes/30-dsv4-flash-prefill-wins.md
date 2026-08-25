@@ -6,9 +6,10 @@
 
 ## What changed
 
-Three patches to the DSV4-Flash prefill path on 2× MI210. **60K prefill 501 → 538.5 tok/s
-(+7.5%), 100K 451 → 491 (+8.9%)**, TTFT@60K 120 → 111.4 s. Cumulative with the prior
-gather-sparse-attention work: **362 → 538.5 at 60K (+48.8%)**. Decode unchanged.
+Three patches to the DSV4-Flash prefill path on 2× MI210 — plus a fourth found afterwards
+(see the follow-up at the end). **60K prefill 501 → 545.4 tok/s, 16K 568 → 601.1, 100K
+451 → 491**, TTFT@60K 120 → 110.0 s. Cumulative with the prior gather-sparse-attention
+work: **362 → 545.4 at 60K (+50.7%)**. Decode unchanged.
 
 Eleven further hypotheses were built and killed with measurements — those, and the
 GPU-utilization data that closes out the campaign, are in `docs/63`.
@@ -91,3 +92,14 @@ build: -DGGML_HIP_MMQ_MFMA=ON -DGGML_HIP_GRAPHS=ON -DGGML_HIP_NO_VMM=ON -DGGML_C
 
 `-ub 1024` was re-swept after FORCE_MMQ and remains the optimum (2048 is −1.6%). Do not
 raise it.
+
+
+## Follow-up (2026-08-25): reverting `MI210_MOE_J`
+
+A fourth change, found after this set was written: the fork's MoE J-tile-selection
+heuristic was a **net loss** and has been reverted. Its premise (that CDNA takes the
+stream-k branch) does not match the CDNA MMQ config, which runs `stream_k = false`.
+
+**16K 589.3 -> 600.9, 60K 538.6 -> 545.8** (+1.9% / +1.4%), needle 3/3, numerically
+neutral. Independently confirmed on pristine upstream, where the heuristic costs 1.4%.
+Deployed; live numbers **16K 601.1, 60K 545.4**. See `docs/63` for the full account.
